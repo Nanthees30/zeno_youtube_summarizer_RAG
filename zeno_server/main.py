@@ -854,26 +854,8 @@ class ChatResponse(BaseModel):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
-
     _key = settings.groq_api_key
-    if not _key:
-        log.error("FATAL: GROQ_API_KEY is not set")
-    elif _key.startswith("gsk_") and len(_key) < 20:
-        log.error("FATAL: GROQ_API_KEY looks truncated — check your .env file")
-    else:
-        log.info(f"Groq API key loaded ({len(_key)} chars, prefix={_key[:7]}…)")
-
-    # Pre-load embedding model so the first request doesn't pay the cold-start cost
-    await asyncio.to_thread(get_embeddings)
-    log.info("Embedding model pre-loaded ✓")
-
-    # Pre-load all FAISS indices for users with ready videos
-    async with _db_pool.acquire() as conn:
-        rows = await conn.fetch("SELECT DISTINCT user_id FROM videos WHERE status='ready'")
-    for row in rows:
-        await asyncio.to_thread(load_user_video_indices, str(row['user_id']))
-    log.info(f"FAISS indices pre-loaded ✓ ({len(rows)} user(s))")
-
+    log.info(f"Groq API key loaded ({len(_key)} chars, prefix={_key[:7]}…)")
     log.info("Zeno v3.3 started — YouTube RAG pipeline")
     yield
     if _db_pool:
