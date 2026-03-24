@@ -122,6 +122,7 @@ class Settings(BaseSettings):
     jwt_expire_hours: int = 24
 
     database_url: str
+    proxy_url: str = ""
 
 
 settings = Settings()
@@ -324,7 +325,7 @@ def load_user_video_indices(user_id: str) -> None:
             log.error(f"[{user_id[:8]}] Failed to load FAISS for {vid}: {e}")
 
 
-# Source builder
+# ── Source builder
 MIN_SIMILARITY: float = 0.3
 
 
@@ -454,12 +455,16 @@ async def fetch_video_metadata(video_id: str) -> dict:
 
 
 async def fetch_transcript(video_id: str) -> list:
-    # Full language preference — English first, then major Indian languages,
-    # then any auto-generated variant so we never silently skip a video.
     _LANG_PREF = ["en", "en-US", "en-GB", "ta", "hi", "te", "kn", "ml", "mr", "bn"]
 
     def _fetch() -> list:
-        ytt = YouTubeTranscriptApi()
+        # Use proxy if configured to bypass YouTube IP blocks on cloud servers
+        proxy_url = getattr(settings, "proxy_url", None)
+        if proxy_url:
+            proxies = {"http": proxy_url, "https": proxy_url}
+            ytt = YouTubeTranscriptApi(proxies=proxies)
+        else:
+            ytt = YouTubeTranscriptApi()
 
         # ── Fast path: request preferred languages directly ────────────────
         try:
