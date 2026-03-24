@@ -39,7 +39,7 @@ export function useChat({ initialMessages = [], onMessagesChange, sessionId, ses
       return
     }
     api.videoStatus(sessionVideoId)
-      .then(d => { if (!cancelled) setIndexReady(d.ready) })
+      .then(d => { if (!cancelled) setIndexReady(d.indexing ? null : d.ready) })
       .catch(() => { if (!cancelled) setIndexReady(false) })
     return () => { cancelled = true }
   }, [sessionVideoId]) 

@@ -4,7 +4,7 @@ import { SendIcon, Loader2Icon } from 'lucide-react'
 const MAX_CHARS    = 2000
 const DEBOUNCE_MS  = 500   // prevent double-sends within 500 ms
 
-export function ChatInput({ onSend, isLoading, disabled = false }) {
+export function ChatInput({ onSend, isLoading, disabled = false, statusMsg = null }) {
   const [value, setValue]       = useState('')
   const taRef                   = useRef(null)
   const lastSentAt              = useRef(0)   // timestamp of most recent submit
@@ -43,6 +43,21 @@ export function ChatInput({ onSend, isLoading, disabled = false }) {
       borderTop: '1px solid var(--border)',
       flexShrink: 0,
     }}>
+      {/* Video status message */}
+      {statusMsg && (
+        <p style={{
+          fontSize: 12, color: 'var(--text-muted)',
+          textAlign: 'center', marginBottom: 8,
+          padding: '6px 12px',
+          background: 'var(--bg-elevated)',
+          border: '1px solid var(--border)',
+          borderRadius: 8,
+          maxWidth: 800, margin: '0 auto 8px',
+        }}>
+          {statusMsg}
+        </p>
+      )}
+
       {/* Char warning */}
       {value.length > MAX_CHARS * 0.8 && (
         <p style={{
@@ -71,7 +86,7 @@ export function ChatInput({ onSend, isLoading, disabled = false }) {
             onChange={e => setValue(e.target.value)}
             onKeyDown={onKeyDown}
             disabled={disabled}
-            placeholder={disabled ? 'Add a YouTube video first, then wait for "Index ready"…' : 'Ask anything about your video…'}
+            placeholder="Ask anything about your video…"
             className="chat-textarea"
             style={{
               flex: 1, resize: 'none', background: 'none',

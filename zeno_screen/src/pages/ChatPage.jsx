@@ -269,7 +269,13 @@ export default function ChatPage() {
         <ChatInput
           onSend={handleSend}
           isLoading={isLoading}
-          disabled={indexReady === null || !sessionVideoId}
+          disabled={indexReady !== true}
+          statusMsg={
+            !sessionVideoId    ? '📹 Please add a YouTube video to start chatting.'
+            : indexReady === null  ? '⏳ Video is being indexed… Please wait.'
+            : indexReady === false ? '❌ Video indexing failed. Please try a different video.'
+            : null
+          }
         />
       </div>
 

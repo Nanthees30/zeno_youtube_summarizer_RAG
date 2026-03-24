@@ -112,7 +112,7 @@ class Settings(BaseSettings):
     faiss_index_path: str = "faiss_index"
     chunk_size:       int = 512
     chunk_overlap:    int = 64
-    top_k:            int = 5
+    top_k:            int = 3
     model_name:       str = "llama-3.1-8b-instant"
     embedding_model:  str = "sentence-transformers/all-MiniLM-L6-v2"
     allowed_origins:  str = "http://localhost:5173,http://localhost:3000"
@@ -862,6 +862,17 @@ async def lifespan(app: FastAPI):
         log.error("FATAL: GROQ_API_KEY looks truncated — check your .env file")
     else:
         log.info(f"Groq API key loaded ({len(_key)} chars, prefix={_key[:7]}…)")
+
+    # Pre-load embedding model so the first request doesn't pay the cold-start cost
+    await asyncio.to_thread(get_embeddings)
+    log.info("Embedding model pre-loaded ✓")
+
+    # Pre-load all FAISS indices for users with ready videos
+    async with _db_pool.acquire() as conn:
+        rows = await conn.fetch("SELECT DISTINCT user_id FROM videos WHERE status='ready'")
+    for row in rows:
+        await asyncio.to_thread(load_user_video_indices, str(row['user_id']))
+    log.info(f"FAISS indices pre-loaded ✓ ({len(rows)} user(s))")
 
     log.info("Zeno v3.3 started — YouTube RAG pipeline")
     yield
