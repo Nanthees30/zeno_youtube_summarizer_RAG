@@ -1,11 +1,13 @@
 import { useState, useRef, useEffect } from 'react'
 import { SendIcon, Loader2Icon } from 'lucide-react'
 
-const MAX_CHARS = 2000
+const MAX_CHARS    = 2000
+const DEBOUNCE_MS  = 500   // prevent double-sends within 500 ms
 
 export function ChatInput({ onSend, isLoading, disabled = false }) {
-  const [value, setValue] = useState('')
-  const taRef = useRef(null)
+  const [value, setValue]       = useState('')
+  const taRef                   = useRef(null)
+  const lastSentAt              = useRef(0)   // timestamp of most recent submit
 
   // Auto-resize
   useEffect(() => {
@@ -18,6 +20,10 @@ export function ChatInput({ onSend, isLoading, disabled = false }) {
   const submit = () => {
     const t = value.trim()
     if (!t || isLoading || disabled || t.length > MAX_CHARS) return
+    // Debounce: swallow duplicate submits within DEBOUNCE_MS
+    const now = Date.now()
+    if (now - lastSentAt.current < DEBOUNCE_MS) return
+    lastSentAt.current = now
     onSend(t)
     setValue('')
     if (taRef.current) taRef.current.style.height = 'auto'

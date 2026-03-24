@@ -276,6 +276,70 @@ def get_llm(streaming: bool = False) -> ChatGroq:
         return _llm
 
 
+# ── Query result cache (in-memory LRU with TTL) ────────────────────────────────
+import time as _time
+from collections import OrderedDict
+
+_CACHE_TTL    = 300          # seconds — cached answers expire after 5 minutes
+_CACHE_MAX    = 500          # max entries per process
+_query_cache: OrderedDict    = OrderedDict()
+_cache_lock   = threading.Lock()
+
+
+def _cache_key(user_id: str, video_id: str, query: str) -> str:
+    """Stable key: user + video + lowercased, whitespace-normalised query."""
+    return f"{user_id}:{video_id}:{' '.join(query.lower().split())}"
+
+
+def _cache_get(key: str):
+    with _cache_lock:
+        entry = _query_cache.get(key)
+        if entry is None:
+            return None
+        if _time.monotonic() - entry["ts"] > _CACHE_TTL:
+            _query_cache.pop(key, None)
+            return None
+        _query_cache.move_to_end(key)          # LRU refresh
+        return entry["value"]
+
+
+def _cache_put(key: str, value) -> None:
+    with _cache_lock:
+        if key in _query_cache:
+            _query_cache.move_to_end(key)
+        _query_cache[key] = {"value": value, "ts": _time.monotonic()}
+        while len(_query_cache) > _CACHE_MAX:
+            _query_cache.popitem(last=False)   # evict oldest
+
+
+# ── Per-user chat rate limiter (10 req/min, in-memory sliding window) ─────────
+_CHAT_RATE_WINDOW = 60          # seconds
+_CHAT_RATE_MAX    = 10          # requests per window
+_chat_rate_store: Dict[str, list] = {}   # user_id → [timestamps]
+_rate_store_lock = threading.Lock()
+
+
+def _check_chat_rate(user_id: str) -> bool:
+    """Return True if within rate limit, False if exceeded."""
+    now = _time.monotonic()
+    with _rate_store_lock:
+        timestamps = _chat_rate_store.get(user_id, [])
+        # Drop timestamps outside the current window
+        timestamps = [t for t in timestamps if now - t < _CHAT_RATE_WINDOW]
+        if len(timestamps) >= _CHAT_RATE_MAX:
+            _chat_rate_store[user_id] = timestamps
+            return False
+        timestamps.append(now)
+        _chat_rate_store[user_id] = timestamps
+        return True
+
+
+# ── In-flight request deduplication ───────────────────────────────────────────
+# Prevents the LLM from being called twice for the exact same concurrent query.
+_inflight: Dict[str, asyncio.Future] = {}
+_inflight_lock = asyncio.Lock()
+
+
 # Tokenizer singleton
 _tokenizer: Optional[tiktoken.Encoding] = None
 _tokenizer_lock = threading.Lock()
@@ -691,122 +755,25 @@ async def _process_video(
 # ── Prompts ────────────────────────────────────────────────────────────────────
 
 AGENT_PROMPT = """\
-# ════════════════════════════════════════════════════════════
-# ZENO — Intelligent YouTube RAG Agent System Prompt
-# ════════════════════════════════════════════════════════════
+You are Zeno, a YouTube video analyst. You answer questions ONLY from the transcript of the user's video. Never use external knowledge or invent timestamps.
 
-You are Zeno, an advanced AI agent specialized in analyzing YouTube video
-content for a specific authenticated user in a multi-tenant SaaS platform.
+Video: {video_title} | Channel: {video_channel}
 
-## ── YOUR IDENTITY & BOUNDARIES ─────────────────────────────
-
-- You serve ONE user at a time. Each user's data is completely isolated.
-- You have access ONLY to the transcript of the video this user has uploaded.
-- You have NO access to other users' videos, chats, or data — ever.
-- You are NOT a general-purpose AI. You are a video content analyst.
-
-## ── YOUR VIDEO CONTEXT ──────────────────────────────────────
-
-User's uploaded video: {video_title}
-Channel: {video_channel}
-Transcript chunks retrieved for this query:
+TRANSCRIPT (retrieved chunks):
 {rag_context}
 
-## ── CONVERSATION HISTORY (Last 3 exchanges) ────────────────
-
+CONVERSATION HISTORY:
 {conversation_history}
 
-## ── CURRENT USER QUESTION ──────────────────────────────────
+USER QUESTION: {query}
 
-{query}
-
-## ── HOW TO THINK (Agent Reasoning Steps) ───────────────────
-
-Step 1 — UNDERSTAND the query type:
-  - Is the user asking about something IN the video? → Use transcript
-  - Is the user asking a follow-up to a previous question? → Use history + transcript
-  - Is the user asking something OUTSIDE the video? → Politely decline
-  - Is the user asking for a visual/diagram explanation? → Generate HTML visual
-  - Is the user asking to compare/summarize the video? → Analyze transcript holistically
-
-Step 2 — CHECK conversation history:
-  - If the current question references "it", "that", "this", "he", "she", "they"
-    or any pronoun → resolve it using the last exchange in history.
-  - If the current question is a follow-up (e.g. "explain more", "give example",
-    "what about X?") → treat it as continuation of the previous topic.
-  - Always maintain context across the conversation for this session.
-
-Step 3 — SEARCH the transcript:
-  - Use the retrieved transcript chunks as your ONLY source of truth.
-  - If chunks are empty or similarity is too low → the topic is not in the video.
-  - If chunks are relevant → extract the answer, cite title + timestamp.
-
-Step 4 — CLASSIFY your response type:
-  - "found"      → Answer is clearly in the transcript
-  - "partial"    → Answer is partially in the transcript, rest is unclear
-  - "not_found"  → Topic is not covered in the video at all
-  - "visual"     → User wants a diagram/illustration of a concept from the video
-  - "followup"   → User is continuing from previous question
-
-Step 5 — GENERATE response based on classification:
-
-  If "found":
-    → Answer directly, cite [Video Title at HH:MM:SS]
-    → Keep answer SHORT (3-5 sentences) and DIRECT
-
-  If "partial":
-    → Share what IS in the video, clearly state what is missing
-    → "The video covers X at [timestamp], but does not mention Y."
-
-  If "not_found":
-    → DO NOT make up an answer
-    → DO NOT use external knowledge
-    → Respond with EXACTLY this alert format:
-
-      ⚠️ This topic is not covered in the uploaded video.
-      The video "{video_title}" discusses: [brief 1-line summary of what
-      the video IS about, based on transcript].
-      Please ask questions related to the video content.
-
-  If "visual":
-    → Provide explanation from transcript
-    → Generate HTML visual using inline CSS only
-    → Use format: <explanation>...</explanation><visual>...</visual><source>...</source>
-
-  If "followup":
-    → Connect to previous exchange from history
-    → Build on the previous answer with new transcript evidence
-    → Cite new timestamp if different section of video
-
-## ── STRICT RULES ────────────────────────────────────────────
-
-✦ NEVER answer from external knowledge if transcript is empty
-✦ NEVER reveal other users' video names, content, or history
-✦ NEVER make up timestamps — only cite what is in the retrieved chunks
-✦ NEVER answer if video_id is null or transcript is missing — ask user to add a video
-✦ ALWAYS maintain conversation continuity using history
-✦ ALWAYS cite [Video Title at Timestamp] when quoting transcript
-✦ ALWAYS respond in the same language the user asked (Tamil/English/Tanglish)
-
-## ── RESPONSE FORMAT ─────────────────────────────────────────
-
-For normal answers:
-  [Your concise answer — 3 to 5 sentences max]
-  Source: [Video Title at MM:SS]
-
-For not_found:
-  [Alert message as described above]
-
-For visual:
-  <explanation>[answer]</explanation>
-  <visual>[HTML]</visual>
-  <source>transcript | general_knowledge</source>
-
-For followup:
-  [Connect to previous context, then extend with new transcript evidence]
-   Source: [Video Title at MM:SS]
-
-# ════════════════════════════════════════════════════════════\
+RULES:
+- Answer from transcript only. Cite [Video Title at MM:SS].
+- If topic not in transcript: "⚠️ This topic is not covered in "{video_title}". Please ask about the video content."
+- For visuals/diagrams: <explanation>...</explanation><visual>[inline-CSS HTML]</visual><source>transcript</source>
+- For follow-ups: resolve pronouns from history, cite new timestamp if applicable.
+- Reply in the same language as the user (English/Tamil/Tanglish).
+- Keep answers concise (3-5 sentences). Do NOT reveal other users' data.\
 """
 
 
@@ -1164,6 +1131,13 @@ async def delete_video(
         if user_id in _user_video_indices:
             _user_video_indices[user_id].pop(video_id, None)
 
+    # Evict all cached answers for this video so stale results aren't served
+    prefix = f"{user_id}:{video_id}:"
+    with _cache_lock:
+        stale = [k for k in _query_cache if k.startswith(prefix)]
+        for k in stale:
+            _query_cache.pop(k, None)
+
     path = _index_path(user_id, video_id)
     if path.exists():
         await asyncio.to_thread(shutil.rmtree, str(path))
@@ -1235,8 +1209,27 @@ async def chat_stream(
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
+    # Per-user rate limit (10 queries/minute) — checked before any DB work
+    if not _check_chat_rate(user_id):
+        raise HTTPException(429, "Rate limit exceeded — max 10 queries per minute")
+
     # Fix #17 — verify ownership and fetch metadata for the agent prompt
     title, channel = await _get_owned_video(user_id, req.video_id, db)
+
+    # ── Cache hit: return cached answer without hitting LLM ─────────────────
+    ckey    = _cache_key(user_id, req.video_id, req.query)
+    cached  = _cache_get(ckey)
+    if cached:
+        log.info(f"[{user_id[:8]}] Cache hit for query on {req.video_id}")
+        async def _from_cache():
+            yield _sse({'type': 'sources',  'sources': cached['sources']})
+            yield _sse({'type': 'token',    'content': cached['answer']})
+            yield _sse({'type': 'done',     'model':   settings.model_name, 'cached': True})
+        return StreamingResponse(
+            _from_cache(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     # Retrieve context BEFORE entering the streaming generator
     context, sources = await asyncio.to_thread(
@@ -1256,13 +1249,17 @@ async def chat_stream(
                     full.append(chunk.content)
                     yield _sse({'type': 'token', 'content': chunk.content})
 
+            full_answer = "".join(full)
             yield _sse({'type': 'done', 'model': settings.model_name})
+
+            # Store in cache for future identical queries
+            _cache_put(ckey, {'answer': full_answer, 'sources': sources})
 
             async with db.acquire() as conn:
                 await conn.execute(
                     "INSERT INTO query_history (user_id, video_id, query, answer, sources_count, mode)"
                     " VALUES ($1::uuid, $2, $3, $4, $5, $6)",
-                    user_id, req.video_id, req.query, "".join(full), len(sources), req.mode,
+                    user_id, req.video_id, req.query, full_answer, len(sources), req.mode,
                 )
                 await conn.execute(
                     "UPDATE users SET query_count=query_count+1 WHERE id=$1::uuid", user_id

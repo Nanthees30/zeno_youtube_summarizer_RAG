@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   PlusIcon, TrashIcon, MessageSquareIcon,
   VideoIcon, ChevronDownIcon, XIcon, LogOutIcon,
@@ -56,10 +56,18 @@ export function Sidebar({
   const groups = groupSessions(sessions)
 
   // ── Fetch video list ────────────────────────────────────────────────────────
+  const pollTimerRef = useRef(null)
+
   const fetchVideos = useCallback(async () => {
     try {
       const data = await api.listVideos()
       setVideos(data)
+      // If nothing is still processing, stop the polling interval
+      const stillProcessing = data.some(v => v.status === 'processing')
+      if (!stillProcessing && pollTimerRef.current) {
+        clearInterval(pollTimerRef.current)
+        pollTimerRef.current = null
+      }
     } catch {
       // ignore — auth may not be ready yet
     } finally {
@@ -67,15 +75,27 @@ export function Sidebar({
     }
   }, [])
 
+  // Run once on mount — never re-runs, so no cascade
   useEffect(() => { fetchVideos() }, [fetchVideos])
 
-  // Poll every 3 s while any video is still processing
+  // Start a stable polling interval only while a video is processing.
+  // Depends on fetchVideos (stable ref) not on `videos`, so it never
+  // restarts mid-interval and never creates the cascade loop.
   useEffect(() => {
-    if (videos.some(v => v.status === 'processing')) {
-      const id = setInterval(fetchVideos, 3000)
-      return () => clearInterval(id)
+    const hasProcessing = videos.some(v => v.status === 'processing')
+    if (hasProcessing && !pollTimerRef.current) {
+      pollTimerRef.current = setInterval(fetchVideos, 3000)
     }
-  }, [videos, fetchVideos])
+    return () => {
+      if (!videos.some(v => v.status === 'processing') && pollTimerRef.current) {
+        clearInterval(pollTimerRef.current)
+        pollTimerRef.current = null
+      }
+    }
+  }, [videos.some(v => v.status === 'processing'), fetchVideos]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Cleanup poll on unmount
+  useEffect(() => () => { if (pollTimerRef.current) clearInterval(pollTimerRef.current) }, [])
 
   // ── Handlers ────────────────────────────────────────────────────────────────
   const handleVideoSuccess = (video_id) => {
