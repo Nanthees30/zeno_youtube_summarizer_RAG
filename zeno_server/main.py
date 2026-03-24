@@ -1306,11 +1306,12 @@ async def query_history(
     ]
 
 
-# ── Health check ───────────────────────────────────────────────────────────────
-@app.get("/health")
+# ── Health check
+@app.api_route("/health", methods=["GET", "HEAD"])
 def health():
-    return {"status": "ok", "model": settings.model_name, "version": "3.3.0"}
-
+    return {"status": "ok",
+             "model": settings.model_name,
+             "version": "3.3.0"}
 
 if __name__ == "__main__":
     import uvicorn
