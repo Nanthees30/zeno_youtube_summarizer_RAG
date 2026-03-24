@@ -19,5 +19,6 @@ argon2-cffi>=23.0.0
 slowapi>=0.1.9
 tiktoken>=0.7.0
 numpy
-torch==2.2.2+cpu --extra-index-url https://download.pytorch.org/whl/cpu
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.2.2+cpu
 sentence-transformers>=3.0.0
