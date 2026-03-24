@@ -76,6 +76,7 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from youtube_transcript_api import YouTubeTranscriptApi
+from youtube_transcript_api.proxies import WebshareProxyConfig, GenericProxyConfig
 
 logging.basicConfig(
     level=logging.INFO,
@@ -458,11 +459,25 @@ async def fetch_transcript(video_id: str) -> list:
     _LANG_PREF = ["en", "en-US", "en-GB", "ta", "hi", "te", "kn", "ml", "mr", "bn"]
 
     def _fetch() -> list:
-        # Use proxy if configured to bypass YouTube IP blocks on cloud servers
+        # Use proxy if configured to bypass YouTube IP blocks on cloud servers.
+        # v1.2.4 API: proxy_config= takes a ProxyConfig object, NOT a proxies dict.
         proxy_url = getattr(settings, "proxy_url", None)
         if proxy_url:
-            proxies = {"http": proxy_url, "https": proxy_url}
-            ytt = YouTubeTranscriptApi(proxies=proxies)
+            from urllib.parse import urlparse
+            parsed = urlparse(proxy_url)
+            if parsed.hostname and "webshare.io" in parsed.hostname:
+                # WebshareProxyConfig adds -rotate suffix, sets Connection:close,
+                # and retries up to 10x on blocked responses automatically.
+                proxy_config = WebshareProxyConfig(
+                    proxy_username=parsed.username,
+                    proxy_password=parsed.password,
+                )
+            else:
+                proxy_config = GenericProxyConfig(
+                    http_url=proxy_url,
+                    https_url=proxy_url,
+                )
+            ytt = YouTubeTranscriptApi(proxy_config=proxy_config)
         else:
             ytt = YouTubeTranscriptApi()
 
