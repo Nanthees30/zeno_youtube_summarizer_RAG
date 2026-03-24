@@ -8,8 +8,11 @@ import { ChatInput }      from '../components/ChatInput'
 import { WelcomeScreen }  from '../components/WelcomeScreen'
 import { useChat }        from '../hooks/useChat'
 import { useChatHistory } from '../hooks/useChatHistory'
+import { useAuth }        from '../context/AuthContext'
 
 export default function ChatPage() {
+  const { user } = useAuth()
+
   // Fix #15 — start sidebar collapsed on mobile (<= 768px)
   const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth > 768)
   const [mode, setMode]               = useState('agent')  // 'agent' | 'chain'
@@ -29,7 +32,7 @@ export default function ChatPage() {
     sessions, activeId, activeMessages,
     createSession, selectSession, saveMessages, deleteSession,
     sessionVideoId, setSessionVideo,
-  } = useChatHistory()
+  } = useChatHistory(user?.id)
 
   // Save messages back to history whenever they change
   const handleMessagesChange = useCallback((msgs) => {

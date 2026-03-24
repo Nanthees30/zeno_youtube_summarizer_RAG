@@ -66,6 +66,7 @@ export function AuthProvider({ children }) {
   function logout() {
     localStorage.removeItem('zeno_token')
     localStorage.removeItem('zeno_user')
+    if (user?.id) localStorage.removeItem(`zeno_sessions_${user.id}`)
     setUser(null)
   }
 

@@ -1,7 +1,5 @@
 import { useState, useCallback, useMemo } from 'react'
 
-const STORAGE_KEY = 'zeno_sessions'
-
 function deserialize(sessions) {
   return sessions.map(s => ({
     ...s,
@@ -13,18 +11,18 @@ function deserialize(sessions) {
   }))
 }
 
-function loadSessions() {
+function loadSessions(key) {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
+    const raw = localStorage.getItem(key)
     return raw ? deserialize(JSON.parse(raw)) : []
   } catch {
     return []
   }
 }
 
-function persist(sessions) {
+function persist(sessions, key) {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions))
+    localStorage.setItem(key, JSON.stringify(sessions))
   } catch { /* storage full — silently skip */ }
 }
 
@@ -39,11 +37,16 @@ function newSession() {
   }
 }
 
-export function useChatHistory() {
-  const [sessions, setSessions] = useState(loadSessions)
+export function useChatHistory(userId) {
+  const STORAGE_KEY = userId ? `zeno_sessions_${userId}` : null
+
+  const [sessions, setSessions] = useState(() =>
+    STORAGE_KEY ? loadSessions(STORAGE_KEY) : []
+  )
   // L-7: derive initial activeId from the same raw storage read — avoids a
   // second full JSON parse just to get the first session id.
   const [activeId, setActiveId] = useState(() => {
+    if (!STORAGE_KEY) return null
     try {
       const raw = localStorage.getItem(STORAGE_KEY)
       return raw ? JSON.parse(raw)[0]?.id ?? null : null
@@ -54,8 +57,8 @@ export function useChatHistory() {
 
   const save = useCallback((next) => {
     setSessions(next)
-    persist(next)
-  }, [])
+    if (STORAGE_KEY) persist(next, STORAGE_KEY)
+  }, [STORAGE_KEY])
 
   const activeMessages = useMemo(() => {
     if (!activeId) return []
