@@ -123,7 +123,10 @@ class Settings(BaseSettings):
     jwt_expire_hours: int = 24
 
     database_url: str
-    proxy_url: str = ""
+    proxy_url:               str = ""
+    webshare_proxy_username: str = ""
+    webshare_proxy_password: str = ""
+    supadata_api_key:        str = ""
 
 
 settings = Settings()
@@ -459,27 +462,30 @@ async def fetch_transcript(video_id: str) -> list:
     _LANG_PREF = ["en", "en-US", "en-GB", "ta", "hi", "te", "kn", "ml", "mr", "bn"]
 
     def _fetch() -> list:
-        # Use proxy if configured to bypass YouTube IP blocks on cloud servers.
-        # v1.2.4 API: proxy_config= takes a ProxyConfig object, NOT a proxies dict.
-        proxy_url = getattr(settings, "proxy_url", None)
-        if proxy_url:
+        # Build proxy config (v1.2.4 uses proxy_config=, NOT proxies= dict).
+        # Priority: webshare credentials > proxy_url > no proxy.
+        proxy_config = None
+        if settings.webshare_proxy_username and settings.webshare_proxy_password:
+            # WebshareProxyConfig adds -rotate suffix, sets Connection:close,
+            # and auto-retries up to 10x on blocked responses.
+            proxy_config = WebshareProxyConfig(
+                proxy_username=settings.webshare_proxy_username,
+                proxy_password=settings.webshare_proxy_password,
+            )
+        elif settings.proxy_url:
             from urllib.parse import urlparse
-            parsed = urlparse(proxy_url)
+            parsed = urlparse(settings.proxy_url)
             if parsed.hostname and "webshare.io" in parsed.hostname:
-                # WebshareProxyConfig adds -rotate suffix, sets Connection:close,
-                # and retries up to 10x on blocked responses automatically.
                 proxy_config = WebshareProxyConfig(
                     proxy_username=parsed.username,
                     proxy_password=parsed.password,
                 )
             else:
                 proxy_config = GenericProxyConfig(
-                    http_url=proxy_url,
-                    https_url=proxy_url,
+                    http_url=settings.proxy_url,
+                    https_url=settings.proxy_url,
                 )
-            ytt = YouTubeTranscriptApi(proxy_config=proxy_config)
-        else:
-            ytt = YouTubeTranscriptApi()
+        ytt = YouTubeTranscriptApi(proxy_config=proxy_config)
 
         # ── Fast path: request preferred languages directly ────────────────
         try:
@@ -517,23 +523,58 @@ async def fetch_transcript(video_id: str) -> list:
         t = transcript.fetch()
         return [{"text": s.text, "start": s.start, "duration": s.duration} for s in t]
 
-    try:
-        return await asyncio.to_thread(_fetch)
-    except ValueError:
-        raise   # re-raise our own descriptive messages unchanged
-    except Exception as e:
-        # Check both class name and message text (case-insensitive) because
-        # youtube_transcript_api v1.x renamed several exception classes.
+    async def _fetch_via_supadata() -> list:
+        """Fallback: fetch transcript via Supadata API (handles YouTube IP blocks)."""
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.get(
+                "https://api.supadata.ai/v1/youtube/transcript",
+                params={"videoId": video_id},
+                headers={"x-api-key": settings.supadata_api_key},
+            )
+            if r.status_code == 404:
+                raise ValueError("No transcript available for this video.")
+            r.raise_for_status()
+            data = r.json()
+            segments = data.get("content") or []
+            if not segments:
+                raise ValueError("No transcript available for this video.")
+            # Supadata returns offset/duration in milliseconds; convert to seconds.
+            return [
+                {
+                    "text": seg["text"],
+                    "start": seg.get("offset", 0) / 1000,
+                    "duration": seg.get("duration", 0) / 1000,
+                }
+                for seg in segments
+            ]
+
+    def _classify_yt_error(e: Exception) -> ValueError:
         sig = (type(e).__name__ + " " + str(e)).lower()
         if "disabled" in sig or "transcriptsdisabled" in sig:
-            raise ValueError("Transcripts are disabled for this video.")
+            return ValueError("Transcripts are disabled for this video.")
         if "unavailable" in sig or "videounavailable" in sig or "private" in sig:
-            raise ValueError("Video is unavailable or private.")
+            return ValueError("Video is unavailable or private.")
         if "blocked" in sig or "toomanyrequests" in sig or "429" in sig or "ratelimit" in sig:
-            raise ValueError("YouTube is blocking transcript requests. Try again in a few minutes.")
+            return ValueError("YouTube is blocking transcript requests. Try again in a few minutes.")
         if "notranscript" in sig or "couldnotretrieve" in sig or "no transcript" in sig:
-            raise ValueError("No transcript found for this video.")
-        raise ValueError(f"Could not fetch transcript: {e}")
+            return ValueError("No transcript found for this video.")
+        return ValueError(f"Could not fetch transcript: {e}")
+
+    try:
+        return await asyncio.to_thread(_fetch)
+    except ValueError as e:
+        # If YouTube blocked us and Supadata is configured, use it as fallback.
+        if "blocking" in str(e).lower() and settings.supadata_api_key:
+            log.info(f"[{video_id}] YouTube blocked direct request — falling back to Supadata")
+            return await _fetch_via_supadata()
+        raise
+    except Exception as e:
+        classified = _classify_yt_error(e)
+        # If it's a blocking error and Supadata is configured, try fallback.
+        if "blocking" in str(classified).lower() and settings.supadata_api_key:
+            log.info(f"[{video_id}] YouTube blocked direct request — falling back to Supadata")
+            return await _fetch_via_supadata()
+        raise classified
 
 
 def seconds_to_timestamp(secs: float) -> str:
