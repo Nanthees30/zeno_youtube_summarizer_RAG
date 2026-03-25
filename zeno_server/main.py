@@ -72,7 +72,7 @@ from jose import JWTError, jwt
 from langchain_community.vectorstores import FAISS
 from langchain_core.documents import Document
 from langchain_groq import ChatGroq
-from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_community.embeddings.fastembed import FastEmbedEmbeddings
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from youtube_transcript_api import YouTubeTranscriptApi
@@ -230,17 +230,19 @@ async def get_current_user(
 
 
 # Embeddings singleton
-_embeddings: Optional[HuggingFaceEmbeddings] = None
+_embeddings = None
 _embeddings_lock = threading.Lock()
 
 
-def get_embeddings() -> HuggingFaceEmbeddings:
+def get_embeddings():
     global _embeddings
     if _embeddings is None:
         with _embeddings_lock:
             if _embeddings is None:
-                log.info(f"Loading embedding model: {settings.embedding_model}")
-                _embeddings = HuggingFaceEmbeddings(model_name=settings.embedding_model)
+                log.info("Loading FastEmbed model...")
+                _embeddings = FastEmbedEmbeddings(
+                    model_name="BAAI/bge-small-en-v1.5"
+                )
     return _embeddings
 
 
