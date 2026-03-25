@@ -201,7 +201,7 @@ export function useChat({ initialMessages = [], onMessagesChange, sessionId, ses
       } catch {
         // keep polling
       }
-    }, 2000)
+    }, 8000)
 
     const timeout = setTimeout(() => {
       clearInterval(interval)

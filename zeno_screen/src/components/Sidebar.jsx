@@ -117,7 +117,7 @@ export function Sidebar({
   useEffect(() => {
     const hasProcessing = videos.some(v => v.status === 'processing')
     if (hasProcessing && !pollTimerRef.current) {
-      pollTimerRef.current = setInterval(fetchVideos, 3000)
+      pollTimerRef.current = setInterval(fetchVideos, 8000)
     }
     return () => {
       if (!videos.some(v => v.status === 'processing') && pollTimerRef.current) {
