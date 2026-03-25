@@ -74,8 +74,37 @@ html, body, #root {
   40%           { transform: scale(1);    opacity: 1;    }
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+@keyframes indexing-slide {
+  0%   { left: -40%; }
+  100% { left: 140%; }
+}
+@keyframes cursor-blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
 
 .fade-slide-up { animation: fade-slide-up 0.18s ease-out forwards; }
+
+/* ── Indexing progress bar ─────────────────────────────────────────────────── */
+.indexing-bar-track {
+  position: relative; overflow: hidden;
+  height: 2px; border-radius: 99px;
+  background: var(--bg-active);
+}
+.indexing-bar {
+  position: absolute; height: 100%; width: 40%;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  border-radius: 99px;
+  animation: indexing-slide 1.5s ease-in-out infinite;
+}
+
+/* ── Streaming cursor ──────────────────────────────────────────────────────── */
+.streaming-cursor {
+  display: inline-block; width: 2px; height: 0.9em;
+  background: var(--accent); margin-left: 3px;
+  vertical-align: text-bottom; border-radius: 1px;
+  animation: cursor-blink 0.7s step-end infinite;
+}
 
 /* ── Layout tokens ─────────────────────────────────────────────────────────── */
 :root {
@@ -137,11 +166,35 @@ html, body, #root {
   /* Message container full width on mobile */
   .messages-container {
     padding: 12px 12px 4px !important;
+    gap: 14px !important;
   }
 
-  /* Chat input full width */
+  /* Chat input full width + bigger touch area */
   .chat-input-wrap {
     padding: 8px 10px 12px !important;
+  }
+
+  /* Prevent iOS zoom on focus, bigger tap area */
+  .chat-textarea {
+    font-size: 16px !important;
+    padding: 10px 0 !important;
+  }
+
+  /* Larger send button touch target */
+  .send-btn {
+    width: 44px !important;
+    height: 44px !important;
+    border-radius: 16px !important;
+  }
+
+  /* Message bubbles: tighter on small screens */
+  .msg-bubble-content {
+    padding: 8px 12px !important;
+    font-size: 13px !important;
+  }
+
+  .msg-bubble-wrap {
+    gap: 8px !important;
   }
 }
 

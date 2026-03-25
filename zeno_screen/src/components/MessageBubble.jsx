@@ -73,7 +73,7 @@ export function MessageBubble({ message }) {
 
   return (
     <div
-      className="fade-slide-up"
+      className="fade-slide-up msg-bubble-wrap"
       style={{
         display: 'flex',
         flexDirection: isUser ? 'row-reverse' : 'row',
@@ -116,7 +116,7 @@ export function MessageBubble({ message }) {
         </p>
 
         {/* Message content */}
-        <div style={{
+        <div className="msg-bubble-content" style={{
           padding: isUser ? '10px 14px' : '12px 16px',
           borderRadius: isUser
             ? 'var(--radius-lg) var(--radius-sm) var(--radius-lg) var(--radius-lg)'
@@ -165,6 +165,7 @@ export function MessageBubble({ message }) {
                     <ReactMarkdown remarkPlugins={[remarkGfm]}>
                       {message.content}
                     </ReactMarkdown>
+                    {message.streaming && <span className="streaming-cursor" />}
                   </div>
                 )
               })()
@@ -298,11 +299,12 @@ export function TypingIndicator() {
           background: 'var(--bg-elevated)',
           border: '1px solid var(--border-strong)',
           borderRadius: '4px 14px 14px 14px',
-          display: 'flex', alignItems: 'center', gap: 5, height: 42,
+          display: 'flex', alignItems: 'center', gap: 6, height: 42,
         }}>
+          <span style={{ fontSize: 12, color: 'var(--text-muted)', marginRight: 2 }}>Zeno is thinking</span>
           {[0, 1, 2].map(i => (
             <span key={i} style={{
-              width: 6, height: 6, borderRadius: '50%',
+              width: 5, height: 5, borderRadius: '50%',
               background: 'var(--accent)',
               display: 'block',
               animation: `pulseDot 1.2s ease-in-out ${i * 0.18}s infinite`,

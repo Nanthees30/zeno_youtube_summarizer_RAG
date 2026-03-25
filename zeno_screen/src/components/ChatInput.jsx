@@ -37,7 +37,7 @@ export function ChatInput({ onSend, isLoading, disabled = false, statusMsg = nul
   const canSend = !isLoading && !disabled && value.trim() && !over
 
   return (
-    <div style={{
+    <div className="chat-input-wrap" style={{
       padding: '12px 16px 16px',
       background: 'var(--bg-base)',
       borderTop: '1px solid var(--border)',
@@ -102,6 +102,7 @@ export function ChatInput({ onSend, isLoading, disabled = false, statusMsg = nul
           <button
             onClick={submit}
             disabled={!canSend}
+            className="send-btn"
             style={{
               width: 38, height: 38, borderRadius: 14, flexShrink: 0,
               display: 'flex', alignItems: 'center', justifyContent: 'center',

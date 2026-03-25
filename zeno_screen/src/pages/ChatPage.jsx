@@ -40,7 +40,7 @@ export default function ChatPage() {
   }, [saveMessages])
 
   const {
-    messages, isLoading, error, indexReady,
+    messages, isLoading, isThinking, error, indexReady,
     sendMessage, clearMessages, onVideoIndexed,
   } = useChat({
     initialMessages: activeMessages,
@@ -137,12 +137,15 @@ export default function ChatPage() {
               style={{
                 background: 'none', border: 'none', cursor: 'pointer',
                 color: 'var(--text-muted)', padding: 5, borderRadius: 7, display: 'flex',
-                transition: 'color 0.15s',
+                alignItems: 'center', transition: 'color 0.15s',
               }}
               onMouseEnter={e => e.currentTarget.style.color = 'var(--text-primary)'}
               onMouseLeave={e => e.currentTarget.style.color = 'var(--text-muted)'}
             >
-              <PanelLeftIcon size={17} />
+              {isMobile
+                ? <span style={{ fontSize: 18, lineHeight: 1, fontFamily: 'sans-serif' }}>☰</span>
+                : <PanelLeftIcon size={17} />
+              }
             </button>
           )}
 
@@ -236,7 +239,7 @@ export default function ChatPage() {
               sessionVideoId={sessionVideoId}
             />
           ) : (
-            <div style={{
+            <div className="messages-container" style={{
               maxWidth: 800, margin: '0 auto',
               padding: '20px 20px 8px',
               display: 'flex', flexDirection: 'column', gap: 20,
@@ -244,7 +247,7 @@ export default function ChatPage() {
               {messages.map(msg => (
                 <MessageBubble key={msg.id} message={msg} />
               ))}
-              {isLoading && <TypingIndicator />}
+              {isThinking && <TypingIndicator />}
               <div ref={bottomRef} style={{ height: 8 }} />
             </div>
           )}
@@ -272,8 +275,8 @@ export default function ChatPage() {
           disabled={indexReady !== true}
           statusMsg={
             !sessionVideoId    ? '📹 Please add a YouTube video to start chatting.'
-            : indexReady === null  ? '⏳ Video is being indexed… Please wait.'
-            : indexReady === false ? '❌ Video indexing failed. Please try a different video.'
+            : indexReady === null  ? 'Video is being indexed… Please wait.'
+            : indexReady === false ? 'Video indexing failed. Please try a different video.'
             : null
           }
         />

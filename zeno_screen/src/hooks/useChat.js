@@ -16,11 +16,13 @@ function makeMsg(role, content, extras = {}) {
 export function useChat({ initialMessages = [], onMessagesChange, sessionId, sessionVideoId } = {}) {
   const [messages, setMessages]     = useState(initialMessages || [])
   const [isLoading, setIsLoading]   = useState(false)
+  const [isThinking, setIsThinking] = useState(false)  // true between send and first token
   const [error, setError]           = useState(null)
   const [indexReady, setIndexReady] = useState(null)
 
-  const prevSessionId = useRef(sessionId)
-  const pollRef       = useRef(null)
+  const prevSessionId  = useRef(sessionId)
+  const pollRef        = useRef(null)
+  const isThinkingRef  = useRef(false)   // mutable ref — readable inside async callbacks
 
   // Reset when session changes
   useEffect(() => {
@@ -72,9 +74,12 @@ export function useChat({ initialMessages = [], onMessagesChange, sessionId, ses
     const next    = [...messages, userMsg]
     update(next)
     setIsLoading(true)
+    setIsThinking(true)
+    isThinkingRef.current = true
 
     try {
       const effectiveMode = VISUAL_RE.test(query) ? 'agent' : mode
+      // Last 3 conversation pairs (6 messages) for context; always sent with every request
       const historyForApi = messages
         .filter(m => m.role === 'user' || m.role === 'assistant')
         .slice(-6)
@@ -99,8 +104,9 @@ export function useChat({ initialMessages = [], onMessagesChange, sessionId, ses
       let sources   = []
       let sseBuffer = ''     // C-5: accumulates bytes across TCP fragments
 
-      const aiMsg = makeMsg('assistant', '', { sources: [], model: '' })
-      update([...next, aiMsg])
+      // aiMsg is not added to messages until first token arrives — TypingIndicator
+      // (controlled by isThinking) is shown until then, giving instant feedback.
+      const aiMsg = makeMsg('assistant', '', { sources: [], model: '', streaming: true })
 
       while (true) {
         const { done, value } = await reader.read()
@@ -131,9 +137,14 @@ export function useChat({ initialMessages = [], onMessagesChange, sessionId, ses
               sources = event.sources
             } else if (event.type === 'token') {
               answer += event.content
-              update([...next, { ...aiMsg, content: answer, sources }])
+              // First token: hide thinking indicator, show streaming bubble
+              if (isThinkingRef.current) {
+                setIsThinking(false)
+                isThinkingRef.current = false
+              }
+              update([...next, { ...aiMsg, content: answer, sources, streaming: true }])
             } else if (event.type === 'done') {
-              update([...next, { ...aiMsg, content: answer, sources, model: event.model }])
+              update([...next, { ...aiMsg, content: answer, sources, model: event.model, streaming: false }])
             } else if (event.type === 'error') {
               // C-4: this throw now reaches the outer catch correctly
               throw new Error(event.detail || 'Stream error')
@@ -146,6 +157,8 @@ export function useChat({ initialMessages = [], onMessagesChange, sessionId, ses
       setError(detail)
       update([...next, makeMsg('error', detail)])
     } finally {
+      setIsThinking(false)
+      isThinkingRef.current = false
       setIsLoading(false)
     }
   }, [messages, update, indexReady, sessionVideoId])
@@ -202,6 +215,7 @@ export function useChat({ initialMessages = [], onMessagesChange, sessionId, ses
   return {
     messages,
     isLoading,
+    isThinking,
     error,
     indexReady,
     sendMessage,

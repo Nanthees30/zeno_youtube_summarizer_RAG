@@ -64,7 +64,8 @@ export const api = {
         'Content-Type':  'application/json',
         Authorization: `Bearer ${token}`,
       },
-      body: JSON.stringify({ query, mode, history, ...(video_id ? { video_id } : {}) }),
+      // _ts makes every request body unique, busting any server-side response cache
+      body: JSON.stringify({ query, mode, history, ...(video_id ? { video_id } : {}), _ts: Date.now() }),
     })
   },
 

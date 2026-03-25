@@ -1,8 +1,14 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   PlusIcon, TrashIcon, MessageSquareIcon,
-  VideoIcon, ChevronDownIcon, XIcon, LogOutIcon,
+  VideoIcon, ChevronDownIcon, XIcon, LogOutIcon, Loader2Icon,
 } from 'lucide-react'
+
+const INDEXING_PHASES = [
+  { until: 5000,    msg: 'Fetching transcript...' },
+  { until: 15000,   msg: 'Chunking transcript...' },
+  { until: Infinity, msg: 'Generating embeddings...' },
+]
 import { YoutubeInput } from './YoutubeInput'
 import { VideoList }    from './VideoList'
 import { useAuth }      from '../context/AuthContext'
@@ -52,6 +58,9 @@ export function Sidebar({
   const [videos,        setVideos]        = useState([])
   const [loadingVideos, setLoadingVideos] = useState(true)
   const [deleteError,   setDeleteError]   = useState(null)  // H-1
+  const [indexingMsg,   setIndexingMsg]   = useState('Fetching transcript...')
+  const indexingStartRef = useRef(null)
+  const statusTimerRef   = useRef(null)
 
   const groups = groupSessions(sessions)
 
@@ -77,6 +86,30 @@ export function Sidebar({
 
   // Run once on mount — never re-runs, so no cascade
   useEffect(() => { fetchVideos() }, [fetchVideos])
+
+  // Cycle through indexing status messages while indexReady === null
+  useEffect(() => {
+    if (indexReady === null && sessionVideoId) {
+      indexingStartRef.current = Date.now()
+      setIndexingMsg('Fetching transcript...')
+      statusTimerRef.current = setInterval(() => {
+        const elapsed = Date.now() - indexingStartRef.current
+        const phase = INDEXING_PHASES.find(p => elapsed < p.until) ?? INDEXING_PHASES[INDEXING_PHASES.length - 1]
+        setIndexingMsg(phase.msg)
+      }, 1000)
+    } else {
+      if (statusTimerRef.current) {
+        clearInterval(statusTimerRef.current)
+        statusTimerRef.current = null
+      }
+    }
+    return () => {
+      if (statusTimerRef.current) {
+        clearInterval(statusTimerRef.current)
+        statusTimerRef.current = null
+      }
+    }
+  }, [indexReady, sessionVideoId])
 
   // Start a stable polling interval only while a video is processing.
   // Depends on fetchVideos (stable ref) not on `videos`, so it never
@@ -360,22 +393,38 @@ export function Sidebar({
               </div>
             )}
 
-            {/* Index status dot */}
-            <div style={{
-              display: 'flex', alignItems: 'center', gap: 6,
-              padding: '6px 4px 0', fontSize: 11, color: 'var(--text-muted)',
-            }}>
-              <span style={{
-                width: 6, height: 6, borderRadius: '50%', flexShrink: 0,
-                background: indexReady === true  ? 'var(--success)'
-                          : indexReady === false ? 'var(--danger)'
-                          : 'var(--text-muted)',
-              }} />
-              {sessionVideoId
-              ? (indexReady === true  ? 'Video ready — ask anything'
-               : indexReady === null  ? 'Indexing transcript…'
-               : 'Indexing failed — see video list')
-              : 'No video in this tab'}
+            {/* Index status — animated when indexing, dot otherwise */}
+            <div style={{ padding: '6px 4px 0' }}>
+              {sessionVideoId && indexReady === null ? (
+                <div>
+                  <div style={{
+                    display: 'flex', alignItems: 'center', gap: 6,
+                    fontSize: 11, color: 'var(--accent)', marginBottom: 5,
+                  }}>
+                    <Loader2Icon size={11} style={{ animation: 'spin 0.8s linear infinite', flexShrink: 0 }} />
+                    {indexingMsg}
+                  </div>
+                  <div className="indexing-bar-track">
+                    <div className="indexing-bar" />
+                  </div>
+                </div>
+              ) : (
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 6,
+                  fontSize: 11, color: 'var(--text-muted)',
+                }}>
+                  <span style={{
+                    width: 6, height: 6, borderRadius: '50%', flexShrink: 0,
+                    background: indexReady === true  ? 'var(--success)'
+                              : indexReady === false ? 'var(--danger)'
+                              : 'var(--text-muted)',
+                  }} />
+                  {sessionVideoId
+                    ? (indexReady === true  ? 'Ready to chat!'
+                     : 'Indexing failed — see video list')
+                    : 'No video in this tab'}
+                </div>
+              )}
             </div>
           </div>
 
