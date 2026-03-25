@@ -8,8 +8,8 @@ const SUGGESTIONS = [
 export function WelcomeScreen({ onSuggestion, indexReady, sessionVideoId }) {
   const statusText = sessionVideoId
     ? (indexReady === true  ? 'Video indexed and ready. Try a suggestion or ask your own question.'
-     : indexReady === null  ? 'Checking backend…'
-     : 'Video is being indexed. Please wait.')
+     : indexReady === null  ? 'Indexing in progress… Please wait.'
+     : 'Video indexing failed. Check the video list in the sidebar for details.')
     : 'No video context available in this tab. Add a YouTube URL from the sidebar to get started.'
 
   return (

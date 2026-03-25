@@ -41,7 +41,15 @@ export function useChat({ initialMessages = [], onMessagesChange, sessionId, ses
       return
     }
     api.videoStatus(sessionVideoId)
-      .then(d => { if (!cancelled) setIndexReady(d.indexing ? null : d.ready) })
+      .then(d => {
+        if (cancelled) return
+        if (d.failed) {
+          setIndexReady(false)
+          setError(d.error_msg || 'Video indexing failed.')
+        } else {
+          setIndexReady(d.indexing ? null : d.ready)
+        }
+      })
       .catch(() => { if (!cancelled) setIndexReady(false) })
     return () => { cancelled = true }
   }, [sessionVideoId]) 
@@ -188,14 +196,14 @@ export function useChat({ initialMessages = [], onMessagesChange, sessionId, ses
         const d = await api.videoStatus(vidId)   // C-3: uses stable local var
         if (d.ready && !d.indexing) {
           setIndexReady(true)
-          clearInterval(pollRef.current?.interval)
-          clearTimeout(pollRef.current?.timeout)
+          clearInterval(interval)
+          clearTimeout(timeout)
           pollRef.current = null
         } else if (d.failed) {
           setIndexReady(false)
           setError(d.error_msg || 'Video indexing failed — try a different video.')
-          clearInterval(pollRef.current?.interval)
-          clearTimeout(pollRef.current?.timeout)
+          clearInterval(interval)
+          clearTimeout(timeout)
           pollRef.current = null
         }
       } catch {
@@ -207,6 +215,7 @@ export function useChat({ initialMessages = [], onMessagesChange, sessionId, ses
       clearInterval(interval)
       pollRef.current = null
       setIndexReady(false)
+      setError('Indexing timed out — please remove the video and try again.')
     }, 120_000)
 
     pollRef.current = { interval, timeout }
