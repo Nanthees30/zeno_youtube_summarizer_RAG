@@ -6,7 +6,7 @@ Architecture:
   Input:   YouTube URL → transcript → FAISS per video
   Storage: faiss_index/{user_id}/{video_id}/
   DB:      PostgreSQL — users, videos, query_history
-  RAG:     HuggingFace all-MiniLM-L6-v2 + FAISS + Groq llama-3.1-8b-instant
+  RAG:     FastEmbed BAAI/bge-small-en-v1.5 + FAISS + Groq llama-3.1-8b-instant
 
 Fixes applied (v3.1):
   #1  FAISS search wrapped in asyncio.to_thread (non-blocking)
@@ -114,7 +114,7 @@ class Settings(BaseSettings):
     chunk_overlap:    int = 64
     top_k:            int = 3
     model_name:       str = "llama-3.1-8b-instant"
-    embedding_model:  str = "sentence-transformers/all-MiniLM-L6-v2"
+    embedding_model:  str = "BAAI/bge-small-en-v1.5"
     allowed_origins:  str = "http://localhost:5173,http://localhost:3000"
 
     google_client_id: str = ""
