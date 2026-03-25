@@ -861,7 +861,7 @@ async def lifespan(app: FastAPI):
     if _db_pool:
         await _db_pool.close()
     log.info("Zeno server stopped")
-
+    
 
 app = FastAPI(title="Zeno RAG API", version="3.3.0", lifespan=lifespan)
 

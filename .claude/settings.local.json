@@ -1,7 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(find /d/Bhararhi/zeno -not -path */.venv/* -not -path */node_modules/* -type d)"
-    ]
-  }
-}
