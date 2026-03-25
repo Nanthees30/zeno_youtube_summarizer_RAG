@@ -241,7 +241,8 @@ def get_embeddings():
             if _embeddings is None:
                 log.info("Loading FastEmbed model...")
                 _embeddings = FastEmbedEmbeddings(
-                    model_name="BAAI/bge-small-en-v1.5"
+                    model_name="BAAI/bge-small-en-v1.5",
+                    threads=1,          # limit ONNX threads to reduce RAM spike
                 )
     return _embeddings
 
