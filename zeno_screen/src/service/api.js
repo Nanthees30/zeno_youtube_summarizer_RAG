@@ -1,6 +1,8 @@
 import axios from 'axios'
 
-const http = axios.create({ baseURL: 'https://zeno-youtube-summarizer-rag-6.onrender.com' })
+const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? ''
+
+const http = axios.create({ baseURL: BASE_URL })
 
 // ── Attach JWT to every request ────────────────────────────────────────────────
 http.interceptors.request.use(config => {
@@ -58,7 +60,7 @@ export const api = {
   chatStream: (query, mode = 'chain', video_id = null, history = []) => {
     const token = localStorage.getItem('zeno_token')
     if (!token) return Promise.reject(new Error('Not authenticated'))
-    return fetch('https://zeno-youtube-summarizer-rag-6.onrender.com/chat/stream', {
+    return fetch(`${BASE_URL}/chat/stream`, {
       method:  'POST',
       headers: {
         'Content-Type':  'application/json',
