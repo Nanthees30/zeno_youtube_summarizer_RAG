@@ -46,3 +46,5 @@ zeno_server/faiss_index/
 *.njsproj
 *.sln
 *.sw?
+chroma_db/
+git/
