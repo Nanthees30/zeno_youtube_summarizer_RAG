@@ -34,3 +34,9 @@ CREATE TABLE IF NOT EXISTS query_history (
     mode          TEXT        DEFAULT 'chain',
     created_at    TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Indexes for common query patterns
+CREATE INDEX IF NOT EXISTS idx_videos_user_id      ON videos       (user_id);
+CREATE INDEX IF NOT EXISTS idx_videos_status       ON videos       (status);
+CREATE INDEX IF NOT EXISTS idx_query_history_user  ON query_history(user_id);
+CREATE INDEX IF NOT EXISTS idx_query_history_video ON query_history(video_id);

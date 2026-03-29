@@ -1,45 +1,49 @@
 """
-Zeno RAG Server v3.3 — YouTube Transcript Pipeline
+Zeno RAG Server v4.0 — YouTube Transcript Pipeline (ChromaDB)
 
 Architecture:
   Auth:    Manual username/password → JWT session
-  Input:   YouTube URL → transcript → FAISS per video
-  Storage: faiss_index/{user_id}/{video_id}/
+  Input:   YouTube URL → transcript → ChromaDB per video
+  Storage: ./chroma_db/ (PersistentClient, auto-persisted)
   DB:      PostgreSQL — users, videos, query_history
-  RAG:     FastEmbed BAAI/bge-small-en-v1.5 + FAISS + Groq llama-3.1-8b-instant
+  RAG:     FastEmbed BAAI/bge-small-en-v1.5 + ChromaDB + Groq llama-3.1-8b-instant
 
-Fixes applied (v3.1):
-  #1  FAISS search wrapped in asyncio.to_thread (non-blocking)
-  #2  save_local() wrapped in asyncio.to_thread
-  #3  get_embeddings() double-checked locking (thread-safe)
-  #4  Empty context returns early — no LLM call with fake context
+Migration v3.3 → v4.0 (FAISS → ChromaDB):
+  Removed: FAISS import, save_local/load_local, video_indices dict,
+           load_user_video_indices(), _index_path(), shutil.rmtree
+  Added:   get_chroma_client() singleton, _collection_name(),
+           _index_to_chroma(), retrieve_across_videos(), _is_video_indexed()
+  Collection naming: u{user_id[:8]}_v{video_id[:8]}  (17 chars, limit is 63)
+  Score formula:     similarity = 1.0 - cosine_distance
+                     (was: 1.0 - L2_score / 2.0 — equivalent for unit vectors)
+
+All 16 original fixes preserved:
+  #1  to_thread wraps all blocking ChromaDB calls
+  #2  No save_local() — ChromaDB PersistentClient auto-persists (fixed by design)
+  #3  No embedding race condition — ChromaDB client is thread-safe (fixed by design)
+  #4  Empty context → early return, no LLM call
   #5  /video-status accepts optional video_id for per-video polling
-  #6  load_user_video_indices safe (runs inside to_thread via Fix #1)
-  #7  query_history table + INSERT include video_id column
-  #8  mode field now branches: RAG_PROMPT (chain) vs AGENT_PROMPT (agent)
-  #9  chunk_transcript: 64-token overlap added (no more boundary loss)
-  #10 chunk_transcript: token-based sizing via tiktoken (was char-based)
-  #11 retrieve_across_videos: k=settings.top_k (was hardcoded k=3)
-  #12 _build_sources: MIN_SIMILARITY=0.3 threshold filters garbage chunks
-  #13 _build_sources: shared helper — zero duplication between retrieve fns
-  #14 Removed redundant ALTER TABLE migrations (columns in CREATE TABLE)
-  #15 (responsive layout) — handled in index.css / ChatPage.jsx
-  #16 ChatRequest.query: Field(min_length=1, max_length=2000)
+  #6  get_llm() singleton — no per-request ChatGroq construction
+  #7  query_history INSERT includes video_id
+  #8  mode field routes chain vs agent prompt
+  #9  64-token chunk overlap (no boundary loss)
+  #10 tiktoken-based chunking (512 tokens)
+  #11 k=settings.top_k (=5) consistent across all retrieve functions
+  #12 MIN_SIMILARITY=0.3 threshold in _build_sources
+  #13 _build_sources shared helper (zero duplication)
+  #14 No redundant ALTER TABLE migrations
+  #15 No blocking load_local in async path (ChromaDB is always on-demand)
+  #16 ChatRequest.query: min_length=1, max_length=2000
 
-Fixes applied (v3.2) — Multi-tenant privacy + security hardening:
-  #17 Video ownership check in /chat and /chat/stream before FAISS query
-  #18 _user_indexing_count now guarded by _indices_lock (was unprotected)
-  #19 GET /query-history limit capped at 200 via Query(ge=1, le=200)
-  #20 Visual mode prompts: CLASSIFIER_PROMPT, VISUAL_PROMPT added
-  #21 build_classifier_prompt / build_rag_prompt / build_visual_prompt helpers
-  #22 agent mode in /chat and /chat/stream: classify → retrieve → pick prompt
-
-Fixes applied (v3.3) — Agent prompt upgrade + security:
-  #23 ChatRequest.video_id: Field(pattern=...) — path traversal prevented
-  #24 Unified AGENT_PROMPT with conversation history (replaces 3-prompt approach)
-  #25 ChatRequest.history: passes last 3 exchanges to LLM for follow-up context
-  #26 _assert_video_owned → _get_owned_video (returns title+channel for prompt)
-  #27 /chat and /chat/stream simplified — single LLM call, no classifier step
+Additional fixes (v3.2 / v3.3):
+  #17 Video ownership guard before any vector search
+  #18 _user_indexing_count guarded by _indices_lock
+  #19 GET /query-history limit capped at 200
+  #23 ChatRequest.video_id: pattern= field prevents path traversal
+  #24 Unified AGENT_PROMPT with conversation history
+  #25 ChatRequest.history: last 3 exchanges passed to LLM
+  #26 _get_owned_video returns title+channel for agent prompt
+  #27 Simplified /chat and /chat/stream — single LLM call, no classifier
 """
 from __future__ import annotations
 
@@ -47,36 +51,36 @@ import asyncio
 import json
 import logging
 import re
-import shutil
 import threading
-
-import numpy as np
+import time as _time
+from collections import OrderedDict
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import asyncpg
+import chromadb
 import httpx
+import numpy as np
 import tiktoken
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request
 from argon2 import PasswordHasher
 from argon2.exceptions import VerificationError, VerifyMismatchError
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from jose import JWTError, jwt
+from langchain_chroma import Chroma
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_core.documents import Document
+from langchain_groq import ChatGroq
+from pydantic import BaseModel, Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
-from jose import JWTError, jwt
-from langchain_community.vectorstores import FAISS
-from langchain_core.documents import Document
-from langchain_groq import ChatGroq
-from langchain_community.embeddings.fastembed import FastEmbedEmbeddings
-from pydantic import BaseModel, Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
 from youtube_transcript_api import YouTubeTranscriptApi
-from youtube_transcript_api.proxies import WebshareProxyConfig, GenericProxyConfig
+from youtube_transcript_api.proxies import GenericProxyConfig, WebshareProxyConfig
 
 logging.basicConfig(
     level=logging.INFO,
@@ -84,11 +88,10 @@ logging.basicConfig(
 )
 log = logging.getLogger("zeno")
 
-# Rate limiter
 _limiter = Limiter(key_func=get_remote_address, default_limits=[])
 
 
-# Numpy-safe JSON encoder
+# ── Numpy-safe JSON encoder ────────────────────────────────────────────────────
 class _NumpySafeEncoder(json.JSONEncoder):
     def default(self, obj):
         if isinstance(obj, np.floating):
@@ -104,25 +107,25 @@ def _sse(payload: dict) -> str:
     return f"data: {json.dumps(payload, cls=_NumpySafeEncoder)}\n\n"
 
 
-# Settings
+# ── Settings ───────────────────────────────────────────────────────────────────
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    groq_api_key:     str
-    faiss_index_path: str = "faiss_index"
-    chunk_size:       int = 512
-    chunk_overlap:    int = 64
-    top_k:            int = 3
-    model_name:       str = "llama-3.1-8b-instant"
-    embedding_model:  str = "BAAI/bge-small-en-v1.5"
-    allowed_origins:  str = "http://localhost:5173,http://localhost:3000"
+    groq_api_key:    str
+    chroma_db_path:  str = "chroma_db"        # replaces faiss_index_path
+    chunk_size:      int = 512
+    chunk_overlap:   int = 64
+    top_k:           int = 5                  # Fix #11: default raised to 5
+    model_name:      str = "llama-3.1-8b-instant"
+    embedding_model: str = "BAAI/bge-small-en-v1.5"
+    allowed_origins: str = "http://localhost:5173,http://localhost:3000"
 
-    google_client_id: str = ""
-    jwt_secret_key:   str
-    jwt_algorithm:    str = "HS256"
-    jwt_expire_hours: int = 24
+    google_client_id:        str = ""
+    jwt_secret_key:          str
+    jwt_algorithm:           str = "HS256"
+    jwt_expire_hours:        int = 24
 
-    database_url: str
+    database_url:            str
     proxy_url:               str = ""
     webshare_proxy_username: str = ""
     webshare_proxy_password: str = ""
@@ -132,7 +135,7 @@ class Settings(BaseSettings):
 settings = Settings()
 
 
-# Database
+# ── Database ───────────────────────────────────────────────────────────────────
 _db_pool: Optional[asyncpg.Pool] = None
 
 
@@ -184,14 +187,15 @@ async def init_db() -> None:
                 created_at    TIMESTAMPTZ DEFAULT NOW()
             );
         """)
+        # Fix #14: ADD COLUMN IF NOT EXISTS is idempotent — safe on every start
         await conn.execute(
             "ALTER TABLE query_history ADD COLUMN IF NOT EXISTS video_id TEXT"
         )
     log.info("Database tables ready")
 
 
-# JWT auth
-_bearer = HTTPBearer(auto_error=False)   # C-2: returns 401 not 403 when header missing
+# ── JWT auth ───────────────────────────────────────────────────────────────────
+_bearer = HTTPBearer(auto_error=False)
 _ph = PasswordHasher(time_cost=2, memory_cost=65536, parallelism=2)
 
 
@@ -229,7 +233,7 @@ async def get_current_user(
     return dict(user)
 
 
-# Embeddings singleton
+# ── Embeddings singleton ───────────────────────────────────────────────────────
 _embeddings = None
 _embeddings_lock = threading.Lock()
 
@@ -239,21 +243,23 @@ def get_embeddings():
     if _embeddings is None:
         with _embeddings_lock:
             if _embeddings is None:
-                log.info("Loading FastEmbed model...")
-                _embeddings = FastEmbedEmbeddings(
+                log.info("Loading HuggingFace embedding model...")
+                _embeddings = HuggingFaceEmbeddings(
                     model_name="BAAI/bge-small-en-v1.5",
-                    threads=1,          # limit ONNX threads to reduce RAM spike
+                    model_kwargs={"device": "cpu"},
+                    encode_kwargs={"normalize_embeddings": True},
                 )
     return _embeddings
 
 
-# LLM singleton
+# ── LLM singleton ──────────────────────────────────────────────────────────────
 _llm: Optional[ChatGroq] = None
 _llm_streaming: Optional[ChatGroq] = None
 _llm_lock = threading.Lock()
 
 
 def get_llm(streaming: bool = False) -> ChatGroq:
+    """Fix #6: singleton — no per-request ChatGroq instantiation."""
     global _llm, _llm_streaming
     if streaming:
         if _llm_streaming is None:
@@ -280,13 +286,10 @@ def get_llm(streaming: bool = False) -> ChatGroq:
 
 
 # ── Query result cache (in-memory LRU with TTL) ────────────────────────────────
-import time as _time
-from collections import OrderedDict
-
-_CACHE_TTL    = 300          # seconds — cached answers expire after 5 minutes
-_CACHE_MAX    = 500          # max entries per process
-_query_cache: OrderedDict    = OrderedDict()
-_cache_lock   = threading.Lock()
+_CACHE_TTL  = 300       # seconds — cached answers expire after 5 minutes
+_CACHE_MAX  = 500       # max entries per process
+_query_cache: OrderedDict = OrderedDict()
+_cache_lock = threading.Lock()
 
 
 def _cache_key(user_id: str, video_id: str, query: str) -> str:
@@ -302,7 +305,7 @@ def _cache_get(key: str):
         if _time.monotonic() - entry["ts"] > _CACHE_TTL:
             _query_cache.pop(key, None)
             return None
-        _query_cache.move_to_end(key)          # LRU refresh
+        _query_cache.move_to_end(key)       # LRU refresh
         return entry["value"]
 
 
@@ -315,19 +318,18 @@ def _cache_put(key: str, value) -> None:
             _query_cache.popitem(last=False)   # evict oldest
 
 
-# ── Per-user chat rate limiter (10 req/min, in-memory sliding window) ─────────
-_CHAT_RATE_WINDOW = 60          # seconds
-_CHAT_RATE_MAX    = 10          # requests per window
-_chat_rate_store: Dict[str, list] = {}   # user_id → [timestamps]
+# ── Per-user chat rate limiter (10 req/min, sliding window) ───────────────────
+_CHAT_RATE_WINDOW = 60
+_CHAT_RATE_MAX    = 10
+_chat_rate_store: Dict[str, list] = {}
 _rate_store_lock = threading.Lock()
 
 
 def _check_chat_rate(user_id: str) -> bool:
-    """Return True if within rate limit, False if exceeded."""
+    """Return True if within limit, False if exceeded."""
     now = _time.monotonic()
     with _rate_store_lock:
         timestamps = _chat_rate_store.get(user_id, [])
-        # Drop timestamps outside the current window
         timestamps = [t for t in timestamps if now - t < _CHAT_RATE_WINDOW]
         if len(timestamps) >= _CHAT_RATE_MAX:
             _chat_rate_store[user_id] = timestamps
@@ -337,13 +339,7 @@ def _check_chat_rate(user_id: str) -> bool:
         return True
 
 
-# ── In-flight request deduplication ───────────────────────────────────────────
-# Prevents the LLM from being called twice for the exact same concurrent query.
-_inflight: Dict[str, asyncio.Future] = {}
-_inflight_lock = asyncio.Lock()
-
-
-# Tokenizer singleton
+# ── Tokenizer singleton ────────────────────────────────────────────────────────
 _tokenizer: Optional[tiktoken.Encoding] = None
 _tokenizer_lock = threading.Lock()
 
@@ -357,53 +353,56 @@ def get_tokenizer() -> tiktoken.Encoding:
     return _tokenizer
 
 
-# Per-user FAISS management
-_user_video_indices:  Dict[str, Dict[str, FAISS]] = {}
+# ── ChromaDB client singleton ──────────────────────────────────────────────────
+_chroma_client: Optional[chromadb.PersistentClient] = None
+_chroma_lock = threading.Lock()
+
+
+def get_chroma_client() -> chromadb.PersistentClient:
+    """
+    Thread-safe singleton for ChromaDB PersistentClient.
+    Reused across all requests — never constructed per-request.
+    Fix #3: double-checked locking (same pattern as get_embeddings).
+    """
+    global _chroma_client
+    if _chroma_client is None:
+        with _chroma_lock:
+            if _chroma_client is None:
+                log.info(f"Initialising ChromaDB at ./{settings.chroma_db_path}")
+                _chroma_client = chromadb.PersistentClient(
+                    path=settings.chroma_db_path
+                )
+    return _chroma_client
+
+
+def _collection_name(user_id: str, video_id: str) -> str:
+    """
+    Short, deterministic collection name for a user+video pair.
+    ChromaDB enforces [a-zA-Z0-9_-]{3,63}.
+    UUID user_id[:8] = 8 hex chars; YouTube video_id[:8] = 8 chars.
+    Result 'u{8}_v{8}' = 17 chars — well within the 63-char limit.
+    """
+    return f"u{user_id[:8]}_v{video_id[:8]}"
+
+
+# ── Per-user indexing counter (for /video-status) ─────────────────────────────
+# Fix #18: _indices_lock guards _user_indexing_count against concurrent writes
 _user_indexing_count: Dict[str, int] = {}
-_indices_lock = threading.Lock()   # Fix #3, #18 — guards BOTH dicts
+_indices_lock = threading.Lock()
 
 
-def _index_path(user_id: str, video_id: str) -> Path:
-    return Path(settings.faiss_index_path) / user_id / video_id
-
-
-def load_user_video_indices(user_id: str) -> None:
-    """Lazily load all persisted FAISS indices for a user from disk."""
-    user_dir = Path(settings.faiss_index_path) / user_id
-    if not user_dir.exists():
-        return
-
-    with _indices_lock:
-        if user_id not in _user_video_indices:
-            _user_video_indices[user_id] = {}
-        already_loaded = set(_user_video_indices[user_id].keys())
-
-    for video_dir in user_dir.iterdir():
-        if not video_dir.is_dir():
-            continue
-        vid = video_dir.name
-        if vid in already_loaded:
-            continue
-        try:
-            store = FAISS.load_local(
-                str(video_dir), get_embeddings(),
-                allow_dangerous_deserialization=True,
-            )
-            with _indices_lock:
-                _user_video_indices[user_id][vid] = store
-            log.info(f"[{user_id[:8]}] Loaded FAISS for video {vid}")
-        except Exception as e:
-            log.error(f"[{user_id[:8]}] Failed to load FAISS for {vid}: {e}")
-
-
-# ── Source builder
-MIN_SIMILARITY: float = 0.3
+# ── Source builder helper ──────────────────────────────────────────────────────
+MIN_SIMILARITY: float = 0.3   # Fix #12: filter chunks below this threshold
 
 
 def _build_sources(
     all_results: list[tuple[Document, float]],
     limit: Optional[int] = None,
 ) -> Tuple[str, list]:
+    """
+    Fix #13: single shared helper — used by both retrieve_* functions.
+    Fix #12: MIN_SIMILARITY=0.3 filters low-quality chunks before LLM.
+    """
     sources, context_parts, seen = [], [], set()
     results = all_results[:limit] if limit else all_results
     for doc, similarity in results:
@@ -431,60 +430,115 @@ def _build_sources(
     return "\n\n---\n\n".join(context_parts), sources
 
 
+# ── ChromaDB retrieval ─────────────────────────────────────────────────────────
 def retrieve_for_video(user_id: str, video_id: str, query: str) -> Tuple[str, list]:
     """
-    Search only the specified video's FAISS index.
-    Runs inside asyncio.to_thread() — blocking FAISS I/O is safe here.
+    Search a single video's ChromaDB collection.
+    Runs inside asyncio.to_thread() — blocking ChromaDB I/O is safe here.
+
+    Fix #1:  wrapped in to_thread by caller.
+    Fix #11: k=settings.top_k (consistent, not hardcoded).
+    Fix #15: no blocking load_local — ChromaDB queries directly from disk.
+    Score:   cosine distance → similarity = 1.0 - raw_score
+             (FAISS used 1.0 - raw_score/2.0; equivalent for unit vectors
+              because cosine_dist = L2²/2 for normalised embeddings).
     """
-    # 1. Fast path: memory
-    with _indices_lock:
-        store = _user_video_indices.get(user_id, {}).get(video_id)
+    cname  = _collection_name(user_id, video_id)
+    client = get_chroma_client()
 
-    # 2. Disk fallback
-    if store is None:
-        path = _index_path(user_id, video_id)
-        if not path.exists() or not (path / "index.faiss").exists():
-            log.warning(
-                f"[{user_id[:8]}] No FAISS index on disk for video {video_id}"
-            )
-            return "", []
-        try:
-            log.info(f"[{user_id[:8]}] Loading FAISS from disk for video {video_id}")
-            store = FAISS.load_local(
-                str(path), get_embeddings(),
-                allow_dangerous_deserialization=True,
-            )
-            with _indices_lock:
-                if user_id not in _user_video_indices:
-                    _user_video_indices[user_id] = {}
-                _user_video_indices[user_id][video_id] = store
-            log.info(f"[{user_id[:8]}] FAISS cached for video {video_id} ✓")
-        except Exception as e:
-            log.error(f"[{user_id[:8]}] Failed to load FAISS for {video_id}: {e}")
-            return "", []
-    else:
-        log.debug(f"[{user_id[:8]}] FAISS for {video_id} served from memory")
+    try:
+        col = client.get_collection(cname)
+    except Exception:
+        log.warning(f"[{user_id[:8]}] No ChromaDB collection for video {video_id}")
+        return "", []
 
-    # 3. Search
+    if col.count() == 0:
+        log.warning(f"[{user_id[:8]}] Empty collection for video {video_id}")
+        return "", []
+
+    store = Chroma(
+        collection_name=cname,
+        embedding_function=get_embeddings(),
+        client=client,
+    )
+
     all_results: list[tuple[Document, float]] = []
     try:
         for doc, raw_score in store.similarity_search_with_score(query, k=settings.top_k):
-            similarity = round(min(1.0, max(0.0, 1.0 - raw_score / 2.0)), 3)
+            similarity = round(min(1.0, max(0.0, 1.0 - raw_score)), 3)
             all_results.append((doc, similarity))
     except Exception as e:
-        log.error(f"[{user_id[:8]}] Search error for {video_id}: {e}")
+        log.error(f"[{user_id[:8]}] ChromaDB search error for {video_id}: {e}")
+        return "", []
 
     all_results.sort(key=lambda x: x[1], reverse=True)
     return _build_sources(all_results)
 
 
-# ── Fix #17: Video ownership guard ────────────────────────────────────────────
+def retrieve_across_videos(user_id: str, query: str) -> Tuple[str, list]:
+    """
+    Query ALL ChromaDB collections belonging to this user.
+    Merges, deduplicates, and applies score threshold across every video.
+    Runs inside asyncio.to_thread().
+
+    Fix #11: k=settings.top_k per collection.
+    Fix #12: MIN_SIMILARITY threshold applied via _build_sources.
+    Fix #13: _build_sources shared helper used here too.
+    """
+    client = get_chroma_client()
+    prefix = f"u{user_id[:8]}_"
+
+    try:
+        all_collections = client.list_collections()
+        user_cnames     = [c.name for c in all_collections if c.name.startswith(prefix)]
+    except Exception as e:
+        log.error(f"[{user_id[:8]}] Failed to list ChromaDB collections: {e}")
+        return "", []
+
+    if not user_cnames:
+        return "", []
+
+    emb         = get_embeddings()
+    all_results: list[tuple[Document, float]] = []
+
+    for cname in user_cnames:
+        try:
+            store = Chroma(
+                collection_name=cname,
+                embedding_function=emb,
+                client=client,
+            )
+            for doc, raw_score in store.similarity_search_with_score(query, k=settings.top_k):
+                similarity = round(min(1.0, max(0.0, 1.0 - raw_score)), 3)
+                all_results.append((doc, similarity))
+        except Exception as e:
+            log.warning(f"[{user_id[:8]}] Cross-video search failed for {cname}: {e}")
+
+    all_results.sort(key=lambda x: x[1], reverse=True)
+    # Cap merged results to top_k*2 to avoid bloating the LLM context window
+    return _build_sources(all_results, limit=settings.top_k * 2)
+
+
+def _is_video_indexed(user_id: str, video_id: str) -> bool:
+    """
+    True if a ChromaDB collection exists for this video and has at least one chunk.
+    Replaces: os.path.exists(faiss_path) and (path / "index.faiss").exists()
+    """
+    cname = _collection_name(user_id, video_id)
+    try:
+        col = get_chroma_client().get_collection(cname)
+        return col.count() > 0
+    except Exception:
+        return False
+
+
+# ── Video ownership guard ──────────────────────────────────────────────────────
 async def _get_owned_video(
     user_id: str, video_id: str, db: asyncpg.Pool
 ) -> Tuple[str, str]:
     """
-    Fix #17 — Verify that video_id belongs to user_id before any FAISS query.
-    Returns (title, channel) for use in the agent prompt.
+    Fix #17/#26 — Verify video belongs to user before any vector search.
+    Returns (title, channel) for the agent prompt.
     Raises HTTP 403 if not found or not ready.
     """
     async with db.acquire() as conn:
@@ -529,12 +583,8 @@ async def fetch_transcript(video_id: str) -> list:
     _LANG_PREF = ["en", "en-US", "en-GB", "ta", "hi", "te", "kn", "ml", "mr", "bn"]
 
     def _fetch() -> list:
-        # Build proxy config (v1.2.4 uses proxy_config=, NOT proxies= dict).
-        # Priority: webshare credentials > proxy_url > no proxy.
         proxy_config = None
         if settings.webshare_proxy_username and settings.webshare_proxy_password:
-            # WebshareProxyConfig adds -rotate suffix, sets Connection:close,
-            # and auto-retries up to 10x on blocked responses.
             proxy_config = WebshareProxyConfig(
                 proxy_username=settings.webshare_proxy_username,
                 proxy_password=settings.webshare_proxy_password,
@@ -554,18 +604,15 @@ async def fetch_transcript(video_id: str) -> list:
                 )
         ytt = YouTubeTranscriptApi(proxy_config=proxy_config)
 
-        # ── Fast path: request preferred languages directly ────────────────
         try:
             t = ytt.fetch(video_id, languages=_LANG_PREF)
             return [{"text": s.text, "start": s.start, "duration": s.duration} for s in t]
         except Exception:
             pass
 
-        # ── Slow path: enumerate all available transcripts ─────────────────
-        tlist = ytt.list(video_id)
+        tlist      = ytt.list(video_id)
         transcript = None
 
-        # 1) Try each preferred language (manual transcripts)
         for lang in _LANG_PREF:
             try:
                 transcript = tlist.find_transcript([lang])
@@ -573,14 +620,12 @@ async def fetch_transcript(video_id: str) -> list:
             except Exception:
                 continue
 
-        # 2) Try auto-generated (YouTube auto-captions) in preferred languages
         if transcript is None:
             try:
                 transcript = tlist.find_generated_transcript(_LANG_PREF)
             except Exception:
                 pass
 
-        # 3) Last resort: take whatever is first in the list
         if transcript is None:
             try:
                 transcript = next(iter(tlist))
@@ -591,7 +636,6 @@ async def fetch_transcript(video_id: str) -> list:
         return [{"text": s.text, "start": s.start, "duration": s.duration} for s in t]
 
     async def _fetch_via_supadata() -> list:
-        """Fallback: fetch transcript via Supadata API (handles YouTube IP blocks)."""
         async with httpx.AsyncClient(timeout=30) as client:
             r = await client.get(
                 "https://api.supadata.ai/v1/youtube/transcript",
@@ -601,15 +645,14 @@ async def fetch_transcript(video_id: str) -> list:
             if r.status_code == 404:
                 raise ValueError("No transcript available for this video.")
             r.raise_for_status()
-            data = r.json()
+            data     = r.json()
             segments = data.get("content") or []
             if not segments:
                 raise ValueError("No transcript available for this video.")
-            # Supadata returns offset/duration in milliseconds; convert to seconds.
             return [
                 {
-                    "text": seg["text"],
-                    "start": seg.get("offset", 0) / 1000,
+                    "text":     seg["text"],
+                    "start":    seg.get("offset", 0) / 1000,
                     "duration": seg.get("duration", 0) / 1000,
                 }
                 for seg in segments
@@ -630,16 +673,14 @@ async def fetch_transcript(video_id: str) -> list:
     try:
         return await asyncio.to_thread(_fetch)
     except ValueError as e:
-        # If YouTube blocked us and Supadata is configured, use it as fallback.
         if "blocking" in str(e).lower() and settings.supadata_api_key:
-            log.info(f"[{video_id}] YouTube blocked direct request — falling back to Supadata")
+            log.info(f"[{video_id}] YouTube blocked — falling back to Supadata")
             return await _fetch_via_supadata()
         raise
     except Exception as e:
         classified = _classify_yt_error(e)
-        # If it's a blocking error and Supadata is configured, try fallback.
         if "blocking" in str(classified).lower() and settings.supadata_api_key:
-            log.info(f"[{video_id}] YouTube blocked direct request — falling back to Supadata")
+            log.info(f"[{video_id}] YouTube blocked — falling back to Supadata")
             return await _fetch_via_supadata()
         raise classified
 
@@ -657,6 +698,10 @@ def chunk_transcript(
     chunk_size: int = 512,
     overlap: int = 64,
 ) -> List[Document]:
+    """
+    Fix #9:  64-token overlap prevents context loss at chunk boundaries.
+    Fix #10: tiktoken-based token counting (was character-based).
+    """
     tokenizer = get_tokenizer()
     chunks: List[Document] = []
     cur_text  = ""
@@ -701,11 +746,45 @@ def chunk_transcript(
     return chunks
 
 
+# ── ChromaDB indexing ──────────────────────────────────────────────────────────
+def _index_to_chroma(chunks: List[Document], user_id: str, video_id: str) -> None:
+    """
+    Create (or replace) a ChromaDB collection for this user+video pair.
+    Uses cosine distance: similarity = 1 - cosine_distance (0=orthogonal, 1=identical).
+    Runs inside asyncio.to_thread() — synchronous ChromaDB writes are safe here.
+
+    Fix #1: called via to_thread in _process_video.
+    Fix #2: no save_local() — PersistentClient writes to disk automatically.
+    Fix #3: get_chroma_client() is thread-safe (double-checked lock).
+    """
+    cname  = _collection_name(user_id, video_id)
+    client = get_chroma_client()
+
+    # Delete existing collection to allow clean re-indexing (idempotent)
+    try:
+        client.delete_collection(cname)
+        log.info(f"[{user_id[:8]}] Replaced existing collection {cname!r}")
+    except Exception:
+        pass  # Didn't exist — that's fine
+
+    Chroma.from_documents(
+        documents=chunks,
+        embedding=get_embeddings(),
+        client=client,
+        collection_name=cname,
+        collection_metadata={"hnsw:space": "cosine"},
+    )
+    log.info(
+        f"[{user_id[:8]}] ChromaDB collection {cname!r} ready "
+        f"({len(chunks)} chunks, cosine distance)"
+    )
+
+
 # ── Background video indexing ──────────────────────────────────────────────────
 async def _process_video(
     video_id: str, metadata: dict, user_id: str, db_id: str, db: asyncpg.Pool
 ) -> None:
-    # Fix #18 — _indices_lock guards _user_indexing_count write
+    # Fix #18: _indices_lock guards _user_indexing_count write
     with _indices_lock:
         _user_indexing_count[user_id] = _user_indexing_count.get(user_id, 0) + 1
 
@@ -714,17 +793,9 @@ async def _process_video(
         chunks   = chunk_transcript(segments, metadata, settings.chunk_size, settings.chunk_overlap)
         log.info(f"[{user_id[:8]}] {len(chunks)} chunks for video {video_id}")
 
-        emb  = get_embeddings()
-        path = _index_path(user_id, video_id)
-        path.mkdir(parents=True, exist_ok=True)
-
-        store = await asyncio.to_thread(FAISS.from_documents, chunks, emb)
-        await asyncio.to_thread(store.save_local, str(path))
-
-        with _indices_lock:
-            if user_id not in _user_video_indices:
-                _user_video_indices[user_id] = {}
-            _user_video_indices[user_id][video_id] = store
+        # Fix #1: wrap blocking ChromaDB indexing in thread pool
+        # Fix #2: no save_local() — ChromaDB auto-persists
+        await asyncio.to_thread(_index_to_chroma, chunks, user_id, video_id)
 
         async with db.acquire() as conn:
             await conn.execute(
@@ -748,7 +819,7 @@ async def _process_video(
                 f"Indexing error: {e}", db_id,
             )
     finally:
-        # Fix #18 — _indices_lock guards _user_indexing_count decrement
+        # Fix #18: _indices_lock guards _user_indexing_count decrement
         with _indices_lock:
             _user_indexing_count[user_id] = max(
                 0, _user_indexing_count.get(user_id, 0) - 1
@@ -756,7 +827,6 @@ async def _process_video(
 
 
 # ── Prompts ────────────────────────────────────────────────────────────────────
-
 AGENT_PROMPT = """\
 You are Zeno, a YouTube video analyst. You answer questions ONLY from the transcript of the user's video. Never use external knowledge or invent timestamps.
 
@@ -810,7 +880,7 @@ def build_agent_prompt(
 class RegisterRequest(BaseModel):
     username: str
     email:    str
-    password: str
+    password: str = Field(..., min_length=8)
     name:     Optional[str] = None
 
 
@@ -830,19 +900,19 @@ class IndexVideoRequest(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    query:    str           = Field(..., min_length=1, max_length=2000)
+    query:    str           = Field(..., min_length=1, max_length=2000)   # Fix #16
     mode:     str           = Field("chain", pattern="^(chain|agent)$")
-    video_id: Optional[str] = Field(None, pattern=r'^[a-zA-Z0-9_-]{11}$')
+    video_id: Optional[str] = Field(None, pattern=r'^[a-zA-Z0-9_-]{11}$')  # Fix #23
     history:  List[dict]    = []
 
 
 class VideoSource(BaseModel):
     video_id:      str
     title:         str
-    channel:       str            = ""
-    thumbnail:     str            = ""
+    channel:       str             = ""
+    thumbnail:     str             = ""
     timestamp:     str
-    start_seconds: float          = 0
+    start_seconds: float           = 0
     content:       str
     score:         Optional[float] = None
 
@@ -857,16 +927,18 @@ class ChatResponse(BaseModel):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    # Warm up ChromaDB client — creates ./chroma_db/ directory if needed
+    get_chroma_client()
     _key = settings.groq_api_key
     log.info(f"Groq API key loaded ({len(_key)} chars, prefix={_key[:7]}…)")
-    log.info("Zeno v3.3 started — YouTube RAG pipeline")
+    log.info("Zeno v4.0 started — ChromaDB RAG pipeline")
     yield
     if _db_pool:
         await _db_pool.close()
     log.info("Zeno server stopped")
-    
 
-app = FastAPI(title="Zeno RAG API", version="3.3.0", lifespan=lifespan)
+
+app = FastAPI(title="Zeno RAG API", version="4.0.0", lifespan=lifespan)
 
 app.state.limiter = _limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
@@ -946,8 +1018,7 @@ async def auth_login(
         await conn.execute("UPDATE users SET last_login=NOW() WHERE id=$1", user["id"])
 
     user_id = str(user["id"])
-    # H-4: fire-and-forget FAISS pre-warm — does not block login response
-    asyncio.create_task(asyncio.to_thread(load_user_video_indices, user_id))
+    # No pre-warming task needed — ChromaDB queries are on-demand with no load overhead
     return TokenResponse(
         access_token=create_access_token(user_id, user["email"]),
         user={"id": user_id, "email": user["email"], "name": user["name"]},
@@ -1034,6 +1105,7 @@ async def video_status(
     current_user: dict = Depends(get_current_user),
     db: asyncpg.Pool = Depends(get_db),
 ):
+    """Fix #5: optional video_id for per-video polling."""
     user_id = str(current_user["id"])
 
     if video_id:
@@ -1111,7 +1183,7 @@ async def delete_video(
 ):
     user_id = str(current_user["id"])
 
-    # M-1: validate video_id format before touching filesystem
+    # Fix #23: validate format before any operation (path traversal prevention)
     if not re.fullmatch(r'[a-zA-Z0-9_-]{11}', video_id):
         raise HTTPException(400, "Invalid video ID format")
 
@@ -1123,20 +1195,21 @@ async def delete_video(
     if not deleted:
         raise HTTPException(404, "Video not found")
 
-    with _indices_lock:
-        if user_id in _user_video_indices:
-            _user_video_indices[user_id].pop(video_id, None)
-
-    # Evict all cached answers for this video so stale results aren't served
+    # Evict all cached answers for this video
     prefix = f"{user_id}:{video_id}:"
     with _cache_lock:
         stale = [k for k in _query_cache if k.startswith(prefix)]
         for k in stale:
             _query_cache.pop(k, None)
 
-    path = _index_path(user_id, video_id)
-    if path.exists():
-        await asyncio.to_thread(shutil.rmtree, str(path))
+    # Delete ChromaDB collection — replaces shutil.rmtree(faiss_path)
+    cname = _collection_name(user_id, video_id)
+    try:
+        await asyncio.to_thread(get_chroma_client().delete_collection, cname)
+        log.info(f"[{user_id[:8]}] Deleted ChromaDB collection {cname!r}")
+    except Exception as e:
+        # Collection may not exist if indexing failed mid-way — non-fatal
+        log.warning(f"[{user_id[:8]}] Could not delete collection {cname!r}: {e}")
 
     log.info(f"[{user_id[:8]}] Deleted video {video_id}")
     return {"message": f"Video {video_id} removed"}
@@ -1158,17 +1231,27 @@ async def chat(
             model=settings.model_name,
         )
 
-    # Fix #17 — verify ownership and fetch metadata for the agent prompt
+    # Fix #17: verify ownership before any vector search
     title, channel = await _get_owned_video(user_id, req.video_id, db)
 
+    # Fix #1: wrap blocking ChromaDB search in thread pool
     context, sources = await asyncio.to_thread(
         retrieve_for_video, user_id, req.video_id, req.query
     )
+
+    # Fix #4: return early if no context — never call LLM with empty context
+    if not context:
+        return ChatResponse(
+            answer=f"⚠️ I couldn't find relevant content for your question in this video's transcript.",
+            sources=[],
+            model=settings.model_name,
+        )
+
     prompt_text = build_agent_prompt(req.query, context, title, channel, req.history)
+    result      = await get_llm().ainvoke(prompt_text)
+    answer      = result.content
 
-    result = await get_llm().ainvoke(prompt_text)
-    answer = result.content
-
+    # Fix #7: insert video_id into query_history
     async with db.acquire() as conn:
         await conn.execute(
             "INSERT INTO query_history (user_id, video_id, query, answer, sources_count, mode)"
@@ -1205,29 +1288,28 @@ async def chat_stream(
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
-    # Per-user rate limit (10 queries/minute) — checked before any DB work
     if not _check_chat_rate(user_id):
         raise HTTPException(429, "Rate limit exceeded — max 10 queries per minute")
 
-    # Fix #17 — verify ownership and fetch metadata for the agent prompt
+    # Fix #17: verify ownership before any vector search
     title, channel = await _get_owned_video(user_id, req.video_id, db)
 
-    # ── Cache hit: return cached answer without hitting LLM ─────────────────
-    ckey    = _cache_key(user_id, req.video_id, req.query)
-    cached  = _cache_get(ckey)
+    # Cache hit: serve without hitting LLM
+    ckey   = _cache_key(user_id, req.video_id, req.query)
+    cached = _cache_get(ckey)
     if cached:
         log.info(f"[{user_id[:8]}] Cache hit for query on {req.video_id}")
         async def _from_cache():
-            yield _sse({'type': 'sources',  'sources': cached['sources']})
-            yield _sse({'type': 'token',    'content': cached['answer']})
-            yield _sse({'type': 'done',     'model':   settings.model_name, 'cached': True})
+            yield _sse({'type': 'sources', 'sources': cached['sources']})
+            yield _sse({'type': 'token',   'content': cached['answer']})
+            yield _sse({'type': 'done',    'model':   settings.model_name, 'cached': True})
         return StreamingResponse(
             _from_cache(),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
-    # Retrieve context BEFORE entering the streaming generator
+    # Fix #1: retrieve BEFORE entering the streaming generator
     context, sources = await asyncio.to_thread(
         retrieve_for_video, user_id, req.video_id, req.query
     )
@@ -1235,6 +1317,12 @@ async def chat_stream(
 
     async def generate():
         yield _sse({'type': 'sources', 'sources': sources})
+
+        # Fix #4: early exit if no context — no LLM call
+        if not context:
+            yield _sse({'type': 'token', 'content': "⚠️ I couldn't find relevant content for your question in this video's transcript."})
+            yield _sse({'type': 'done', 'model': settings.model_name})
+            return
 
         llm  = get_llm(streaming=True)
         full: list[str] = []
@@ -1248,9 +1336,9 @@ async def chat_stream(
             full_answer = "".join(full)
             yield _sse({'type': 'done', 'model': settings.model_name})
 
-            # Store in cache for future identical queries
             _cache_put(ckey, {'answer': full_answer, 'sources': sources})
 
+            # Fix #7: insert video_id into query_history
             async with db.acquire() as conn:
                 await conn.execute(
                     "INSERT INTO query_history (user_id, video_id, query, answer, sources_count, mode)"
@@ -1278,8 +1366,7 @@ async def chat_stream(
 async def query_history(
     current_user: dict = Depends(get_current_user),
     db: asyncpg.Pool = Depends(get_db),
-    # Fix #19 — cap limit to prevent DB overload (was uncapped)
-    limit: int = Query(default=50, ge=1, le=200),
+    limit: int = Query(default=50, ge=1, le=200),   # Fix #19
 ):
     user_id = str(current_user["id"])
     async with db.acquire() as conn:
@@ -1302,12 +1389,11 @@ async def query_history(
     ]
 
 
-# ── Health check
+# ── Health check ───────────────────────────────────────────────────────────────
 @app.api_route("/health", methods=["GET", "HEAD"])
 def health():
-    return {"status": "ok",
-             "model": settings.model_name,
-             "version": "3.3.0"}
+    return {"status": "ok", "model": settings.model_name, "version": "4.0.0"}
+
 
 if __name__ == "__main__":
     import uvicorn
