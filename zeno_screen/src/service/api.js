@@ -21,6 +21,8 @@ http.interceptors.response.use(
       localStorage.removeItem('zeno_token')
       localStorage.removeItem('zeno_user')
       window.location.href = '/login'
+      // Reset after navigation so HMR sessions don't permanently suppress future 401s
+      setTimeout(() => { _redirecting = false }, 3000)
     }
     return Promise.reject(err)
   }

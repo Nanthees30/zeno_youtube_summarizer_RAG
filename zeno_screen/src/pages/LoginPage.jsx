@@ -26,7 +26,11 @@ export default function LoginPage() {
       }
       navigate('/', { replace: true })
     } catch (err) {
-      setError(err?.response?.data?.detail ?? 'Something went wrong — please try again.')
+      const detail = err?.response?.data?.detail
+      const msg = Array.isArray(detail)
+        ? detail.map(d => d.msg ?? String(d)).join(', ')
+        : (detail ?? 'Something went wrong — please try again.')
+      setError(msg)
     } finally {
       setLoading(false)
     }
@@ -126,7 +130,7 @@ export default function LoginPage() {
             value={password}
             onChange={e => setPassword(e.target.value)}
             required
-            minLength={6}
+            minLength={8}
             style={inputStyle}
           />
 

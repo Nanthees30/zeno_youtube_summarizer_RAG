@@ -3,18 +3,41 @@ import { api } from '../service/api'
 
 const AuthContext = createContext(null)
 
+// Clears auth keys from localStorage. Accepts the current user object (or null)
+// so it always has the correct id even when called from a stale closure.
+function _clearStorage(currentUser) {
+  const stored = localStorage.getItem('zeno_user')
+  let uid = currentUser?.id
+  if (!uid && stored) {
+    try { uid = JSON.parse(stored)?.id } catch { /* ignore */ }
+  }
+  localStorage.removeItem('zeno_token')
+  localStorage.removeItem('zeno_user')
+  if (uid) localStorage.removeItem(`zeno_sessions_${uid}`)
+}
+
 export function AuthProvider({ children }) {
   const [user, setUser]       = useState(null)
   const [loading, setLoading] = useState(true)
 
-  // Rehydrate from localStorage on mount
+  // Rehydrate: validate token against /auth/me on every mount
   useEffect(() => {
-    const token    = localStorage.getItem('zeno_token')
-    const userData = localStorage.getItem('zeno_user')
-    if (token && userData) {
-      try { setUser(JSON.parse(userData)) } catch { logout() }
+    const token = localStorage.getItem('zeno_token')
+    if (!token) {
+      setLoading(false)
+      return
     }
-    setLoading(false)
+    api.getMe()
+      .then(userData => {
+        localStorage.setItem('zeno_user', JSON.stringify(userData))
+        setUser(userData)
+      })
+      .catch(() => {
+        // Token invalid or expired — clear everything
+        _clearStorage(null)
+        setUser(null)
+      })
+      .finally(() => setLoading(false))
   }, [])
 
   // L-6: proactive token refresh — check every 30 min, refresh if within 1 hour of expiry
@@ -64,9 +87,7 @@ export function AuthProvider({ children }) {
   }
 
   function logout() {
-    localStorage.removeItem('zeno_token')
-    localStorage.removeItem('zeno_user')
-    if (user?.id) localStorage.removeItem(`zeno_sessions_${user.id}`)
+    _clearStorage(user)
     setUser(null)
   }
 
