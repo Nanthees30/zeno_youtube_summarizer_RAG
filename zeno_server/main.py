@@ -1038,7 +1038,8 @@ async def auth_me(current_user: dict = Depends(get_current_user)):
 
 
 @app.post("/auth/refresh", response_model=TokenResponse)
-async def auth_refresh(current_user: dict = Depends(get_current_user)):
+@_limiter.limit("10/minute")
+async def auth_refresh(request: Request, current_user: dict = Depends(get_current_user)):
     user_id = str(current_user["id"])
     return TokenResponse(
         access_token=create_access_token(user_id, current_user["email"]),
