@@ -1,7 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
   PlusIcon, TrashIcon, MessageSquareIcon,
   VideoIcon, ChevronDownIcon, XIcon, LogOutIcon, Loader2Icon,
+  LayoutDashboardIcon,
 } from 'lucide-react'
 
 const INDEXING_PHASES = [
@@ -52,6 +54,7 @@ export function Sidebar({
   indexReady,
   collapsed, onToggle,
 }) {
+  const navigate                          = useNavigate()
   const { user, logout }                  = useAuth()
   const [videoOpen,     setVideoOpen]     = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(null)
@@ -459,6 +462,20 @@ export function Sidebar({
                   {user.email}
                 </p>
               </div>
+
+              <button
+                onClick={() => navigate('/dashboard')}
+                title="Vector DB Dashboard"
+                style={{
+                  background: 'none', border: 'none', cursor: 'pointer',
+                  color: 'var(--text-muted)', padding: 4, borderRadius: 6,
+                  display: 'flex', alignItems: 'center', flexShrink: 0,
+                  transition: 'color 0.15s',
+                }}
+                onMouseEnter={e => e.currentTarget.style.color = 'var(--accent)'}
+                onMouseLeave={e => e.currentTarget.style.color = 'var(--text-muted)'}
+              >
+              </button>
 
               <button
                 onClick={logout}
