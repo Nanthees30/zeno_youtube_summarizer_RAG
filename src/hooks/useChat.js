@@ -22,9 +22,8 @@ export function useChat({ initialMessages = [], onMessagesChange, sessionId, ses
 
   const prevSessionId  = useRef(sessionId)
   const pollRef        = useRef(null)
-  const isThinkingRef  = useRef(false)   // mutable ref — readable inside async callbacks
+  const isThinkingRef  = useRef(false)
 
-  // Reset when session changes
   useEffect(() => {
     if (sessionId !== prevSessionId.current) {
       prevSessionId.current = sessionId
@@ -87,10 +86,9 @@ export function useChat({ initialMessages = [], onMessagesChange, sessionId, ses
 
     try {
       const effectiveMode = VISUAL_RE.test(query) ? 'agent' : mode
-      // Last 3 conversation pairs (6 messages) for context; always sent with every request
       const historyForApi = messages
         .filter(m => m.role === 'user' || m.role === 'assistant')
-        .slice(-6)
+        .slice(-6)  
         .map(m => ({ role: m.role, content: m.content }))
       const response = await api.chatStream(query, effectiveMode, sessionVideoId, historyForApi)
 
