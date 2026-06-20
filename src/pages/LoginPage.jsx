@@ -180,14 +180,14 @@ export default function LoginPage() {
         {/* ── Form ─────────────────────────────────────────────────────── */}
         <form onSubmit={handleSubmit} className="w-full flex flex-col gap-4">
 
-          {mode === 'register' && (
+          {/* {mode === 'register' && (
             <input
               type="text" name="username" placeholder="Username"
               value={formData.username} onChange={handleChange} required
               style={inputBase}
               onFocus={onFocus} onBlur={onBlur}
             />
-          )}
+          )} */}
 
           <input
             type="email" name="email" placeholder="Email"
