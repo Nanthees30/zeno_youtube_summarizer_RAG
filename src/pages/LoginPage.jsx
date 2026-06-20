@@ -180,14 +180,14 @@ export default function LoginPage() {
         {/* ── Form ─────────────────────────────────────────────────────── */}
         <form onSubmit={handleSubmit} className="w-full flex flex-col gap-4">
 
-          {/* {mode === 'register' && (
+          {mode === 'register' && (
             <input
               type="text" name="username" placeholder="Username"
               value={formData.username} onChange={handleChange} required
               style={inputBase}
               onFocus={onFocus} onBlur={onBlur}
             />
-          )} */}
+          )}
 
           <input
             type="email" name="email" placeholder="Email"
@@ -251,7 +251,7 @@ export default function LoginPage() {
             className="ml-1.5 bg-transparent border-none font-semibold text-sm cursor-pointer p-0 transition-opacity duration-200 hover:opacity-75"
             style={{ color: 'var(--accent)', fontFamily: 'var(--font-sans)' }}
           >
-            {mode === 'login' ? 'Register' : 'Sign in'}
+            {/* {mode === 'login' ? 'Register' : 'Sign in'} */}
           </button>
         </p>
 
