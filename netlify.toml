@@ -1,5 +1,5 @@
 [[redirects]]
   from = "/api/*"
-  to = "http://YOUR_EC2_PUBLIC_IP:8000/:splat"
+  to = "http://13.233.252.234:8000/:splat"
   status = 200
   force = true
