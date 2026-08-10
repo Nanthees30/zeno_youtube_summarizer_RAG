@@ -1,35 +1,51 @@
-from typing import Optional
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from jose import JWTError, jwt
+import aiosqlite
+from jose import jwt, JWTError
 from app.core.config import settings
 from app.core.database import get_db
-import asyncpg
 
-_bearer = HTTPBearer(auto_error=False)
+security = HTTPBearer()
 
 async def get_current_user(
-    creds: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
-    db: asyncpg.Pool = Depends(get_db),
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: aiosqlite.Connection = Depends(get_db)
 ) -> dict:
-    if creds is None:
-        raise HTTPException(401, "Authorization header missing")
+    token = credentials.credentials
     try:
         payload = jwt.decode(
-            creds.credentials,
+            token,
             settings.jwt_secret_key,
-            algorithms=[settings.jwt_algorithm],
+            algorithms=[settings.jwt_algorithm]
         )
-        user_id = payload.get("sub")
-        if not user_id:
-            raise HTTPException(401, "Invalid token")
+        user_id: str = payload.get("sub")
+        if user_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token payload"
+            )
     except JWTError:
-        raise HTTPException(401, "Invalid or expired token")
-
-    async with db.acquire() as conn:
-        user = await conn.fetchrow(
-            "SELECT * FROM users WHERE id=$1::uuid", user_id
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate credentials"
         )
+
+    # Convert user_id safely (supports both integer ID & string username)
+    try:
+        user_id_query = int(user_id)
+    except (ValueError, TypeError):
+        user_id_query = user_id
+
+    async with db.execute(
+        "SELECT * FROM users WHERE id = ? OR username = ?",
+        (user_id_query, user_id)
+    ) as cursor:
+        user = await cursor.fetchone()
+
     if not user:
-        raise HTTPException(401, "User not found")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found"
+        )
+
     return dict(user)
