@@ -29,4 +29,5 @@ dependencies = [
     "numpy",
     "pinecone>=9.1.0",
     "fastembed>=0.8.0",
+    "aiosqlite>=0.22.1",
 ]
