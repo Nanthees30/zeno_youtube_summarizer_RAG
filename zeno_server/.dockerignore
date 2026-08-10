@@ -1,0 +1,23 @@
+# Virtual environment — never copy into image
+.venv/
+venv/
+
+# Python cache
+__pycache__/
+*.py[oc]
+*.pyo
+
+# Vector store data — mounted at runtime or rebuilt
+chroma_db/
+faiss_index/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Dev artefacts
+*.log
+logs/
+.git/
+.github/
