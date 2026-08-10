@@ -7,63 +7,112 @@ export default function LoginPage() {
   const { login, register } = useAuth();
   const navigate = useNavigate();
 
-  const [mode, setMode]         = useState('login');
-  const [formData, setFormData] = useState({ username: '', email: '', password: '' });
-  const [loading, setLoading]   = useState(false);
-  const [error, setError]       = useState(null);
+  const [mode, setMode] = useState('login');
+  const [formData, setFormData] = useState({
+    username: '',
+    email: '',
+    password: '',
+  });
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
   const [videoOpacity, setVideoOpacity] = useState(1);
 
-  const videoRef  = useRef(null);
+  const videoRef = useRef(null);
   const fadingRef = useRef(false);
 
-  // ── Seamless video loop with fade ──────────────────────────────────────────
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
+
     const FADE_BEFORE_END = 1.2;
 
     const handleTimeUpdate = () => {
       if (!video.duration) return;
-      if ((video.duration - video.currentTime) <= FADE_BEFORE_END && !fadingRef.current) {
+
+      if (
+        video.duration - video.currentTime <= FADE_BEFORE_END &&
+        !fadingRef.current
+      ) {
         fadingRef.current = true;
         setVideoOpacity(0);
       }
     };
+
     const handleEnded = () => {
       video.currentTime = 0;
-      video.play();
-      setTimeout(() => { fadingRef.current = false; setVideoOpacity(1); }, 200);
+      video.play().catch(() => {});
+
+      setTimeout(() => {
+        fadingRef.current = false;
+        setVideoOpacity(1);
+      }, 200);
     };
 
     video.addEventListener('timeupdate', handleTimeUpdate);
-    video.addEventListener('ended',      handleEnded);
+    video.addEventListener('ended', handleEnded);
+
     return () => {
       video.removeEventListener('timeupdate', handleTimeUpdate);
-      video.removeEventListener('ended',      handleEnded);
+      video.removeEventListener('ended', handleEnded);
     };
   }, []);
 
-  const handleChange = (e) =>
-    setFormData(prev => ({ ...prev, [e.target.name]: e.target.value }));
+  const handleChange = (e) => {
+    setFormData((prev) => ({
+      ...prev,
+      [e.target.name]: e.target.value,
+    }));
+  };
 
   async function handleSubmit(e) {
     e.preventDefault();
     setError(null);
     setLoading(true);
+
     const { username, email, password } = formData;
+
     try {
       if (mode === 'login') {
         await login(email, password);
       } else {
-        if (!username.trim()) { setError('Username is required'); setLoading(false); return; }
-        await register(username.trim(), email, password);
+        if (!username.trim()) {
+          setError('Username is required');
+          setLoading(false);
+          return;
+        }
+
+        await register(
+          username.trim(),
+          email,
+          password,
+          username.trim()
+        );
       }
+
       navigate('/', { replace: true });
     } catch (err) {
+      console.error('[Auth Error]', err);
+
       const detail = err?.response?.data?.detail;
-      const msg = Array.isArray(detail)
-        ? detail.map(d => d.msg ?? String(d)).join(', ')
-        : (detail ?? 'Something went wrong — please try again.');
+      let msg = '';
+
+      if (Array.isArray(detail)) {
+        msg = detail
+          .map(
+            (d) =>
+              `${d.loc?.[d.loc.length - 1] ?? 'field'}: ${d.msg}`
+          )
+          .join(', ');
+      } else if (typeof detail === 'string') {
+        msg = detail;
+      } else if (err?.message === 'Network Error' || !err?.response) {
+        msg =
+          'Cannot connect to backend server. Please check your network.';
+      } else {
+        msg =
+          err?.message || 'Something went wrong — please try again.';
+      }
+
       setError(msg);
     } finally {
       setLoading(false);
@@ -71,190 +120,448 @@ export default function LoginPage() {
   }
 
   const toggleMode = () => {
-    setMode(p => p === 'login' ? 'register' : 'login');
+    setMode((prev) => (prev === 'login' ? 'register' : 'login'));
     setError(null);
   };
 
   const onFocus = (e) => {
     e.target.style.borderColor = 'var(--accent)';
-    e.target.style.boxShadow   = '0 0 0 3px var(--accent-glow)';
+    e.target.style.boxShadow =
+      '0 0 0 3px var(--accent-glow)';
+    e.target.style.background = 'rgba(20, 20, 20, 0.95)';
   };
+
   const onBlur = (e) => {
     e.target.style.borderColor = 'var(--border-strong)';
-    e.target.style.boxShadow   = 'none';
+    e.target.style.boxShadow = 'none';
+    e.target.style.background = 'rgba(20, 20, 20, 0.85)';
   };
 
   const inputBase = {
-    width:        '100%',
-    padding:      '13px 16px',
-    borderRadius: 'var(--radius-md)',
-    border:       '1px solid var(--border-strong)',
-    background:   'var(--bg-elevated)',
-    color:        'var(--text-primary)',
-    fontSize:     14,
-    outline:      'none',
-    boxSizing:    'border-box',
-    fontFamily:   'var(--font-sans)',
-    transition:   'border-color 0.2s, box-shadow 0.2s',
+    width: '100%',
+    height: 46,
+    padding: '0 14px',
+    borderRadius: 10,
+    border: '1px solid var(--border-strong)',
+    background: 'rgba(20, 20, 20, 0.85)',
+    color: 'var(--text-primary)',
+    fontSize: 14,
+    outline: 'none',
+    boxSizing: 'border-box',
+    fontFamily: 'var(--font-sans)',
+    transition:
+      'border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease',
   };
 
   return (
-    <div className="relative min-h-screen w-screen overflow-hidden flex">
-
-      {/* ── Background Video ─────────────────────────────────────────────── */}
-      <video
-        ref={videoRef}
-        autoPlay muted playsInline
-        src={bgVideo}
-        className="absolute inset-0 w-full h-full object-cover z-0 transition-opacity duration-700"
-        style={{ opacity: videoOpacity }}
-      />
-
-      {/* ── Overlay ──────────────────────────────────────────────────────── */}
+    <div
+      className="relative w-full flex"
+      style={{
+        minHeight: '100dvh',
+        background: '#000000',
+        overflow: 'hidden',
+      }}
+    >
+      {/* ================= BACKGROUND VIDEO ================= */}
       <div
-        className="absolute inset-0 z-10"
-        style={{
-          background: 'linear-gradient(135deg, rgba(12,14,26,0.30) 0%, rgba(12,14,26,0.75) 100%)',
-        }}
-      />
-
-      {/* ── Glass Card ───────────────────────────────────────────────────── */}
-      <div
-        className="absolute z-20 flex flex-col items-center w-full"
-        style={{
-          bottom:              '8%',
-          right:               '6%',
-          maxWidth:            430,
-          gap:                 24,
-          padding:             '48px 44px',
-          borderRadius:        'var(--radius-xl)',
-          background:          'var(--bg-surface)',
-          backdropFilter:      'blur(24px)',
-          WebkitBackdropFilter:'blur(24px)',
-          border:              '1px solid var(--border-strong)',
-          boxShadow:           '0 32px 64px rgba(0,0,0,0.6), 0 0 48px var(--accent-glow)',
-          boxSizing:           'border-box',
-        }}
+        className="absolute inset-0 z-0"
+        style={{ overflow: 'hidden' }}
       >
-
-        {/* ── Z Logo ───────────────────────────────────────────────────── */}
-        <div
-          className="flex items-center justify-center shrink-0 text-white"
+        <video
+          ref={videoRef}
+          autoPlay
+          muted
+          playsInline
+          loop={false}
+          src={bgVideo}
+          className="w-full h-full object-cover transition-opacity duration-700"
           style={{
-            width:        68,
-            height:       68,
-            borderRadius: 'var(--radius-lg)',
-            fontSize:     28,
-            fontWeight:   800,
-            fontFamily:   'var(--font-mono)',
-            background:   'linear-gradient(135deg, var(--accent) 0%, var(--accent-hover) 100%)',
-            boxShadow:    '0 8px 28px var(--accent-glow)',
-            border:       '1px solid var(--border-strong)',
+            opacity: videoOpacity,
+          }}
+        />
+
+        <div
+          className="absolute inset-0"
+          style={{
+            background:
+              'linear-gradient(90deg, rgba(0,0,0,0.25) 0%, rgba(0,0,0,0.5) 52%, rgba(0,0,0,0.95) 100%)',
+          }}
+        />
+      </div>
+
+      {/* ================= LEFT BRAND PANEL ================= */}
+      <div className="hidden md:flex relative z-10 flex-col justify-between w-[58%] p-14">
+        <div className="flex items-center gap-3">
+          <img
+            src="/zeno_logo.png"
+            alt="Zeno"
+            style={{
+              width: 36,
+              height: 36,
+              objectFit: 'contain',
+            }}
+            onError={(e) => {
+              e.target.src = '/logo.png';
+            }}
+          />
+
+          <span
+            style={{
+              fontFamily: 'var(--font-display)',
+              fontWeight: 700,
+              fontSize: 18,
+              letterSpacing: '1px',
+              color: 'var(--text-primary)',
+            }}
+          >
+            ZENO
+          </span>
+        </div>
+
+        <div
+          style={{
+            maxWidth: 420,
+            marginBottom: 20,
           }}
         >
-          Z
-        </div>
-
-        {/* ── Heading ──────────────────────────────────────────────────── */}
-        <div className="text-center w-full">
-          <h1
-            className="font-bold text-center mb-2"
+          <h2
             style={{
-              fontSize:      26,
-              color:         'var(--text-primary)',
-              fontFamily:    'var(--font-display)',
-              letterSpacing: '-0.3px',
+              fontFamily: 'var(--font-display)',
+              fontWeight: 700,
+              fontSize: 32,
+              lineHeight: 1.15,
+              color: 'var(--text-primary)',
+              marginBottom: 10,
             }}
           >
-            {mode === 'login' ? 'Welcome back' : 'Create account'}
-          </h1>
+            {/* Your voice, */}
+            <br />
+            {/* understood instantly. */}
+          </h2>
+
           <p
-            className="text-sm leading-relaxed"
-            style={{ color: 'var(--text-secondary)' }}
+            style={{
+              fontSize: 14,
+              color: 'var(--text-muted)',
+              lineHeight: 1.6,
+              margin: 0,
+            }}
           >
-            {mode === 'login' ? 'Sign in to continue to Zeno' : 'Get started with Zeno'}
+            {/* Sign in to pick up right where you left off. */}
           </p>
         </div>
+      </div>
 
-        {/* ── Form ─────────────────────────────────────────────────────── */}
-        <form onSubmit={handleSubmit} className="w-full flex flex-col gap-4">
-
-          {mode === 'register' && (
-            <input
-              type="text" name="username" placeholder="Username"
-              value={formData.username} onChange={handleChange} required
-              style={inputBase}
-              onFocus={onFocus} onBlur={onBlur}
-            />
-          )}
-
-          <input
-            type="email" name="email" placeholder="Email"
-            value={formData.email} onChange={handleChange} required
-            style={inputBase}
-            onFocus={onFocus} onBlur={onBlur}
-          />
-
-          <input
-            type="password" name="password" placeholder="Password"
-            value={formData.password} onChange={handleChange}
-            required minLength={8}
-            style={inputBase}
-            onFocus={onFocus} onBlur={onBlur}
-          />
-
-          {/* Error */}
-          {error && (
-            <p
-              className="text-xs text-center font-medium"
-              style={{ color: 'var(--danger)', marginTop: -4 }}
-            >
-              {error}
-            </p>
-          )}
-
-          {/* ── Submit button ─────────────────────────────────────────── */}
-          <button
-            type="submit" disabled={loading}
-            className="w-full font-bold tracking-wide transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 disabled:opacity-60 disabled:cursor-not-allowed disabled:transform-none"
-            style={{
-              padding:      '14px',
-              borderRadius: 'var(--radius-md)',
-              border:       'none',
-              marginTop:    4,
-              background:   'var(--accent)',
-              color:        '#ffffff',
-              fontSize:     15,
-              boxShadow:    '0 6px 20px var(--accent-glow)',
-              cursor:       loading ? 'not-allowed' : 'pointer',
-              fontFamily:   'var(--font-sans)',
-            }}
-            onMouseEnter={e => { if (!loading) e.currentTarget.style.background = 'var(--accent-hover)'; }}
-            onMouseLeave={e => { e.currentTarget.style.background = 'var(--accent)'; }}
-          >
-            {loading ? 'Please wait…' : mode === 'login' ? 'Sign in' : 'Create account'}
-          </button>
-        </form>
-
-        {/* ── Divider ──────────────────────────────────────────────────── */}
-        <div className="w-full" style={{ height: 1, background: 'var(--border)' }} />
-
-        {/* ── Toggle mode ──────────────────────────────────────────────── */}
-        <p
-          className="text-sm text-center m-0"
-          style={{ color: 'var(--text-secondary)', marginTop: -8 }}
+      {/* ================= FORM PANEL ================= */}
+      <div
+        className="relative z-10 w-full md:w-[42%] flex items-center justify-center px-7 py-8 sm:px-8 md:px-12 md:py-10"
+        style={{
+          minHeight: '100dvh',
+          boxSizing: 'border-box',
+        }}
+      >
+        <div
+          className="w-full flex flex-col items-center"
+          style={{
+            maxWidth: 380,
+            padding: '30px 28px',
+            gap: 18,
+            borderRadius: 18,
+            background: 'rgba(12, 12, 12, 0.88)',
+            backdropFilter: 'blur(28px)',
+            WebkitBackdropFilter: 'blur(28px)',
+            border: '1px solid rgba(255,255,255,0.09)',
+            boxShadow:
+              '0 24px 60px rgba(0,0,0,0.8), 0 0 32px var(--accent-glow)',
+            boxSizing: 'border-box',
+          }}
         >
-          {mode === 'login' ? "Don't have an account?" : 'Already have an account?'}
-          <button
-            type="button" onClick={toggleMode}
-            className="ml-1.5 bg-transparent border-none font-semibold text-sm cursor-pointer p-0 transition-opacity duration-200 hover:opacity-75"
-            style={{ color: 'var(--accent)', fontFamily: 'var(--font-sans)' }}
-          >
-            {mode === 'login' ? 'Register' : 'Sign in'}
-          </button>
-        </p>
+          {/* ================= MOBILE LOGO ================= */}
+          <img
+            src="/zeno_logo.png"
+            alt="Zeno Logo"
+            className="md:hidden"
+            style={{
+              width: 42,
+              height: 42,
+              objectFit: 'contain',
+              filter:
+                'drop-shadow(0 6px 20px var(--accent-glow))',
+              marginBottom: 2,
+            }}
+            onError={(e) => {
+              e.target.src = '/logo.png';
+            }}
+          />
 
+          {/* ================= HEADING ================= */}
+          <div
+            style={{
+              textAlign: 'center',
+              width: '100%',
+            }}
+          >
+            <h1
+              className="text-[19px] md:text-[22px]"
+              style={{
+                fontWeight: 700,
+                color: 'var(--text-primary)',
+                fontFamily: 'var(--font-display)',
+                letterSpacing: '-0.35px',
+                margin: 0,
+                marginBottom: 5,
+              }}
+            >
+              {mode === 'login'
+                ? 'Welcome back'
+                : 'Create account'}
+            </h1>
+
+            <p
+              style={{
+                fontSize: 12,
+                color: 'var(--text-muted)',
+                lineHeight: 1.4,
+                margin: 0,
+              }}
+            >
+              {mode === 'login'
+                ? 'Sign in to continue to Zeno'
+                : 'Get started with Zeno'}
+            </p>
+          </div>
+
+          {/* ================= FORM ================= */}
+          <form
+            onSubmit={handleSubmit}
+            style={{
+              width: '100%',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 12,
+            }}
+          >
+            {/* Username */}
+            {mode === 'register' && (
+              <div style={{ width: '100%' }}>
+                <label
+                  htmlFor="username"
+                  style={{
+                    display: 'block',
+                    fontSize: 11.5,
+                    fontWeight: 600,
+                    color: 'var(--text-muted)',
+                    marginBottom: 6,
+                  }}
+                >
+                  Username
+                </label>
+
+                <input
+                  id="username"
+                  type="text"
+                  name="username"
+                  placeholder="Enter your username"
+                  value={formData.username}
+                  onChange={handleChange}
+                  required
+                  autoComplete="username"
+                  style={inputBase}
+                  onFocus={onFocus}
+                  onBlur={onBlur}
+                />
+              </div>
+            )}
+
+            {/* Email */}
+            <div style={{ width: '100%' }}>
+              <label
+                htmlFor="email"
+                style={{
+                  display: 'block',
+                  fontSize: 11.5,
+                  fontWeight: 600,
+                  color: 'var(--text-muted)',
+                  marginBottom: 6,
+                }}
+              >
+                Email
+              </label>
+
+              <input
+                id="email"
+                type="email"
+                name="email"
+                placeholder="Enter your email"
+                value={formData.email}
+                onChange={handleChange}
+                required
+                autoComplete="email"
+                style={inputBase}
+                onFocus={onFocus}
+                onBlur={onBlur}
+              />
+            </div>
+
+            {/* Password */}
+            <div style={{ width: '100%' }}>
+              <label
+                htmlFor="password"
+                style={{
+                  display: 'block',
+                  fontSize: 11.5,
+                  fontWeight: 600,
+                  color: 'var(--text-muted)',
+                  marginBottom: 6,
+                }}
+              >
+                Password
+              </label>
+
+              <input
+                id="password"
+                type="password"
+                name="password"
+                placeholder="Enter your password"
+                value={formData.password}
+                onChange={handleChange}
+                required
+                minLength={8}
+                autoComplete={
+                  mode === 'login'
+                    ? 'current-password'
+                    : 'new-password'
+                }
+                style={inputBase}
+                onFocus={onFocus}
+                onBlur={onBlur}
+              />
+            </div>
+
+            {/* Error */}
+            {error && (
+              <div
+                style={{
+                  width: '100%',
+                  padding: '9px 11px',
+                  borderRadius: 8,
+                  background: 'rgba(255, 70, 70, 0.08)',
+                  border:
+                    '1px solid rgba(255, 70, 70, 0.18)',
+                  boxSizing: 'border-box',
+                }}
+              >
+                <p
+                  style={{
+                    fontSize: 11,
+                    color: 'var(--danger)',
+                    textAlign: 'center',
+                    fontWeight: 500,
+                    lineHeight: 1.4,
+                    margin: 0,
+                  }}
+                >
+                  {error}
+                </p>
+              </div>
+            )}
+
+            {/* Submit */}
+            <button
+              type="submit"
+              disabled={loading}
+              style={{
+                width: '100%',
+                height: 46,
+                padding: '0 14px',
+                borderRadius: 10,
+                border: 'none',
+                marginTop: 2,
+                background: 'var(--accent)',
+                color: '#000000',
+                fontSize: 13,
+                fontWeight: 700,
+                boxShadow:
+                  '0 7px 22px var(--accent-glow)',
+                cursor: loading
+                  ? 'not-allowed'
+                  : 'pointer',
+                fontFamily: 'var(--font-sans)',
+                transition:
+                  'transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease',
+                opacity: loading ? 0.7 : 1,
+              }}
+              onMouseEnter={(e) => {
+                if (!loading) {
+                  e.currentTarget.style.background =
+                    'var(--accent-hover)';
+                  e.currentTarget.style.transform =
+                    'translateY(-1px)';
+                  e.currentTarget.style.boxShadow =
+                    '0 9px 26px var(--accent-glow)';
+                }
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background =
+                  'var(--accent)';
+                e.currentTarget.style.transform =
+                  'translateY(0)';
+                e.currentTarget.style.boxShadow =
+                  '0 7px 22px var(--accent-glow)';
+              }}
+            >
+              {loading
+                ? 'Please wait...'
+                : mode === 'login'
+                  ? 'Sign in'
+                  : 'Create account'}
+            </button>
+          </form>
+
+          {/* ================= DIVIDER ================= */}
+          <div
+            style={{
+              width: '100%',
+              height: 1,
+              background: 'var(--border)',
+              opacity: 0.8,
+            }}
+          />
+
+          {/* ================= TOGGLE ================= */}
+          <p
+            style={{
+              fontSize: 11.5,
+              color: 'var(--text-muted)',
+              textAlign: 'center',
+              margin: 0,
+              lineHeight: 1.5,
+            }}
+          >
+            {mode === 'login'
+              ? "Don't have an account?"
+              : 'Already have an account?'}
+
+            <button
+              type="button"
+              onClick={toggleMode}
+              style={{
+                marginLeft: 5,
+                background: 'none',
+                border: 'none',
+                fontWeight: 700,
+                fontSize: 11.5,
+                cursor: 'pointer',
+                color: 'var(--accent)',
+                fontFamily: 'var(--font-sans)',
+                padding: 0,
+              }}
+            >
+              {mode === 'login' ? 'Register' : 'Sign in'}
+            </button>
+          </p>
+        </div>
       </div>
     </div>
   );
-} 
+}
