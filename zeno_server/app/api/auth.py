@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-import asyncpg
+import aiosqlite
 from app.core.database import get_db
 from app.models.schemas import RegisterRequest, LoginRequest, TokenResponse
 from app.core.security import create_access_token, hash_password, verify_password
@@ -10,48 +10,43 @@ router = APIRouter()
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
 async def register(
     body: RegisterRequest,
-    db: asyncpg.Pool = Depends(get_db)
+    db: aiosqlite.Connection = Depends(get_db)
 ):
-    async with db.acquire() as conn:
-        # 1. Check if email or username already exists
-        existing_user = await conn.fetchrow(
-            "SELECT id FROM users WHERE email = $1 OR username = $2",
-            body.email, body.username
-        )
-        if existing_user:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="User with this email or username already exists"
-            )
+    async with db.execute(
+        "SELECT id FROM users WHERE email = ? OR username = ?",
+        (body.email, body.username)
+    ) as cursor:
+        existing = await cursor.fetchone()
 
-        # 2. Hash password and insert user into Postgres DB
-        hashed_pwd = hash_password(body.password)
-        display_name = getattr(body, 'name', None) or body.username
-
-        new_user = await conn.fetchrow(
-            """
-            INSERT INTO users (username, email, password_hash, name)
-            VALUES ($1, $2, $3, $4)
-            RETURNING id, email, name
-            """,
-            body.username, body.email, hashed_pwd, display_name
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User with this email or username already exists"
         )
 
-    user_id = str(new_user["id"])
+    hashed_pwd = hash_password(body.password)
+    display_name = getattr(body, 'name', None) or body.username
+
+    cursor = await db.execute(
+        "INSERT INTO users (username, email, password_hash, name) VALUES (?, ?, ?, ?)",
+        (body.username, body.email, hashed_pwd, display_name)
+    )
+    await db.commit()
+    user_id = str(cursor.lastrowid)
+
     return TokenResponse(
-        access_token=create_access_token(user_id, new_user["email"]),
-        user={"id": user_id, "email": new_user["email"], "name": new_user["name"]},
+        access_token=create_access_token(user_id, body.email),
+        user={"id": user_id, "email": body.email, "name": display_name},
     )
 
 @router.post("/login", response_model=TokenResponse)
 async def login(
     body: LoginRequest,
-    db: asyncpg.Pool = Depends(get_db)
+    db: aiosqlite.Connection = Depends(get_db)
 ):
-    async with db.acquire() as conn:
-        user = await conn.fetchrow(
-            "SELECT * FROM users WHERE email=$1", body.email
-        )
+    async with db.execute("SELECT * FROM users WHERE email = ?", (body.email,)) as cursor:
+        user = await cursor.fetchone()
+
     if not user or not verify_password(user["password_hash"], body.password):
         raise HTTPException(401, "Invalid email or password")
 
