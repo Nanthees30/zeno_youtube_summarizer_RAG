@@ -524,3 +524,5 @@ youtube-transcript-api==1.2.4
     # via zeno-server (pyproject.toml)
 zstandard==0.25.0
     # via langsmith
+aiosqlite==0.20.0
+aiohappyeyeballs==2.7.1
