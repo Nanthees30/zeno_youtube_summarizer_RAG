@@ -37,26 +37,46 @@ async def _fetch_via_supadata(video_id: str) -> list:
             for seg in segments
         ]
 
+async def fetch_transcript(video_id: str):
+    # 1. First try standard youtube-transcript-api
+    try:
+        segments = YouTubeTranscriptApi.get_transcript(video_id)
+        return [
+            {
+                "text": s["text"],
+                "start": s["start"],
+                "duration": s.get("duration", 0)
+            }
+            for s in segments
+        ]
+    except Exception as primary_error:
+        # 2. Fallback: Supadata API (Bypasses YouTube Cloud IP Bans)
+        if settings.supadata_api_key:
+            try:
+                async with httpx.AsyncClient() as client:
+                    resp = await client.get(
+                        "https://api.supadata.ai/v1/youtube/transcript",
+                        params={"videoId": video_id, "lang": "en"},
+                        headers={"x-api-key": settings.supadata_api_key},
+                        timeout=15.0
+                    )
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        content = data.get("content", [])
+                        if content:
+                            return [
+                                {
+                                    "text": item.get("text", ""),
+                                    "start": float(item.get("start", 0)) / 1000.0 if float(item.get("start", 0)) > 1000 else float(item.get("start", 0)),
+                                    "duration": float(item.get("duration", 0)) / 1000.0 if float(item.get("duration", 0)) > 1000 else float(item.get("duration", 0))
+                                }
+                                for item in content
+                            ]
+            except Exception:
+                pass
 
-async def fetch_transcript(video_id: str) -> list:
-    if settings.supadata_api_key:
-        try:
-            return await _fetch_via_supadata(video_id)
-        except Exception:
-            pass
-
-    def _fetch():
-        proxy_config = None
-        if settings.webshare_proxy_username and settings.webshare_proxy_password:
-            proxy_config = WebshareProxyConfig(
-                proxy_username=settings.webshare_proxy_username,
-                proxy_password=settings.webshare_proxy_password,
-            )
-        ytt = YouTubeTranscriptApi(proxy_config=proxy_config)
-        t = ytt.fetch(video_id, languages=["en", "ta", "hi", "en-US", "en-GB"])
-        return [{"text": s.text, "start": s.start} for s in t]
-
-    return await asyncio.to_thread(_fetch)
+        # Clean User-Friendly Error Message
+        raise RuntimeError("Could not fetch transcript for this video. Please ensure the video has English captions enabled.")
 
 
 def chunk_transcript(
