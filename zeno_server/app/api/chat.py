@@ -1,5 +1,6 @@
 import asyncio
 import json
+import aiosqlite
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from app.core.database import get_db
@@ -12,16 +13,14 @@ from app.services.prompts import build_prompt
 
 router = APIRouter()
 
-
 def _sse(payload: dict) -> str:
     return f"data: {json.dumps(payload)}\n\n"
-
 
 @router.post("/chat", response_model=ChatResponse)
 async def chat(
     req: ChatRequest,
     current_user: dict = Depends(get_current_user),
-    db=Depends(get_db)
+    db: aiosqlite.Connection = Depends(get_db)
 ):
     user_id = str(current_user["id"])
     context, sources = await asyncio.to_thread(
@@ -41,12 +40,11 @@ async def chat(
         model=settings.model_name
     )
 
-
 @router.post("/chat/stream")
 async def chat_stream(
     req: ChatRequest,
     current_user: dict = Depends(get_current_user),
-    db=Depends(get_db)
+    db: aiosqlite.Connection = Depends(get_db)
 ):
     user_id = str(current_user["id"])
 
@@ -78,13 +76,14 @@ async def chat_stream(
                     yield _sse({'type': 'token', 'content': chunk.content})
             yield _sse({'type': 'done', 'model': settings.model_name})
 
-            async with db.acquire() as conn:
-                await conn.execute(
-                    "INSERT INTO query_history (user_id, video_id, query, answer, sources_count, mode)"
-                    " VALUES ($1::uuid, $2, $3, $4, $5, $6)",
-                    user_id, req.video_id, req.query,
-                    "".join(full), len(sources), req.mode,
-                )
+            await db.execute(
+                """
+                INSERT INTO query_history (user_id, video_id, query, answer, sources_count, mode)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (user_id, req.video_id, req.query, "".join(full), len(sources), req.mode)
+            )
+            await db.commit()
         except Exception as e:
             yield _sse({'type': 'error', 'detail': str(e)})
 
