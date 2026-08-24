@@ -1,6 +1,7 @@
 import httpx
 from youtube_transcript_api import YouTubeTranscriptApi
 from app.core.config import settings
+from langchain_core.documents import Document
 
 async def fetch_transcript(video_id: str):
     # 1. Try YouTubeTranscriptApi with Auto-Generated Captions support
@@ -66,3 +67,48 @@ async def fetch_transcript(video_id: str):
         pass
 
     raise RuntimeError("Could not fetch transcript for this video. Please try another video or check if English captions are available.")
+
+
+def chunk_transcript(segments: list, metadata: dict, chunk_size: int = 1000) -> list:
+    """
+    Groups transcript segments into larger chunks of approximately `chunk_size` characters.
+    Returns LangChain Document objects for seamless Vector DB indexing.
+    """
+    chunks = []
+    current_chunk_text = ""
+    start_time = 0.0
+    
+    for segment in segments:
+        if not current_chunk_text:
+            start_time = segment.get("start", 0.0)
+            
+        current_chunk_text += segment.get("text", "") + " "
+        
+        # When text reaches the chunk size limit, save it as a LangChain Document
+        if len(current_chunk_text) >= chunk_size:
+            chunks.append(
+                Document(
+                    page_content=current_chunk_text.strip(),
+                    metadata={
+                        "title": metadata.get("title", ""),
+                        "channel": metadata.get("channel", ""),
+                        "start": start_time
+                    }
+                )
+            )
+            current_chunk_text = ""
+            
+    # Don't forget the leftover text at the end of the video
+    if current_chunk_text.strip():
+        chunks.append(
+            Document(
+                page_content=current_chunk_text.strip(),
+                metadata={
+                    "title": metadata.get("title", ""),
+                    "channel": metadata.get("channel", ""),
+                    "start": start_time
+                }
+            )
+        )
+        
+    return chunks
