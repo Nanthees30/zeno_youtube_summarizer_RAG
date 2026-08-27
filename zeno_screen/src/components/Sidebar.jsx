@@ -2,12 +2,11 @@ import { useState, useCallback, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   TrashIcon, MessageSquareIcon,
-  VideoIcon, XIcon, LogOutIcon, Loader2Icon,
+  VideoIcon, XIcon, Loader2Icon,
   LayoutDashboardIcon,
 } from 'lucide-react'
 import { YoutubeInput } from './YoutubeInput'
 import { VideoList } from './VideoList'
-import { useAuth } from '../context/AuthContext'
 import { api } from '../service/api'
 
 const INDEXING_PHASES = [
@@ -55,7 +54,6 @@ export function Sidebar({
   collapsed, onToggle,
 }) {
   const navigate = useNavigate()
-  const { user, logout } = useAuth()
   const [confirmDelete, setConfirmDelete] = useState(null)
   const [videos, setVideos] = useState([])
   const [loadingVideos, setLoadingVideos] = useState(true)
@@ -119,7 +117,7 @@ export function Sidebar({
         pollTimerRef.current = null
       }
     }
-  }, [videos.some(v => v.status === 'processing'), fetchVideos])
+  }, [videos, fetchVideos])
 
   useEffect(() => () => { if (pollTimerRef.current) clearInterval(pollTimerRef.current) }, [])
 
@@ -181,7 +179,7 @@ export function Sidebar({
       >
         <div style={{ width: 'var(--sidebar-w)', display: 'flex', flexDirection: 'column', height: '100%' }}>
 
-          {/* Logo Header (Clean Logo Only) */}
+          {/* Logo Header */}
           <div style={{
             padding: '14px 14px 12px',
             display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -321,7 +319,7 @@ export function Sidebar({
                         marginBottom: 3,
                         display: 'flex',
                         alignItems: 'center',
-                        justify: 'space-between',
+                        justifyContent: 'space-between',
                       }}
                     >
                       <div style={{ display: 'flex', alignItems: 'center', gap: 9, minWidth: 0, flex: 1 }}>
@@ -410,62 +408,30 @@ export function Sidebar({
             </div>
           </div>
 
-          {/* User Profile Footer */}
-          {user && (
-            <div style={{
-              borderTop: '1px solid var(--border)',
-              padding: '12px 14px', flexShrink: 0,
-              display: 'flex', alignItems: 'center', gap: 10,
-              background: 'var(--bg-surface)',
-            }}>
-              <div style={{
-                width: 32, height: 32, borderRadius: '50%', flexShrink: 0,
-                background: 'var(--accent-soft)',
-                border: '1px solid var(--border-strong)',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                fontSize: 13, fontWeight: 800, color: 'var(--accent)',
-              }}>
-                {user.name?.[0]?.toUpperCase() ?? '?'}
-              </div>
-
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <p style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {user.name}
-                </p>
-                <p style={{ fontSize: 10, color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {user.email}
-                </p>
-              </div>
-
-              <button
-                onClick={() => navigate('/dashboard')}
-                title="Vector DB Dashboard"
-                style={{
-                  background: 'none', border: 'none', cursor: 'pointer',
-                  color: 'var(--text-muted)', padding: 6, borderRadius: 6,
-                  display: 'flex', alignItems: 'center', flexShrink: 0, transition: 'color 0.15s',
-                }}
-                onMouseEnter={e => e.currentTarget.style.color = 'var(--accent)'}
-                onMouseLeave={e => e.currentTarget.style.color = 'var(--text-muted)'}
-              >
-                <LayoutDashboardIcon size={15} />
-              </button>
-
-              <button
-                onClick={logout}
-                title="Sign out"
-                style={{
-                  background: 'none', border: 'none', cursor: 'pointer',
-                  color: 'var(--text-muted)', padding: 6, borderRadius: 6,
-                  display: 'flex', alignItems: 'center', flexShrink: 0, transition: 'color 0.15s',
-                }}
-                onMouseEnter={e => e.currentTarget.style.color = 'var(--danger)'}
-                onMouseLeave={e => e.currentTarget.style.color = 'var(--text-muted)'}
-              >
-                <LogOutIcon size={15} />
-              </button>
-            </div>
-          )}
+          {/* Simple Open-Source Footer (Replaced User Profile) */}
+          <div style={{
+            borderTop: '1px solid var(--border)',
+            padding: '12px 14px', flexShrink: 0,
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            background: 'var(--bg-surface)',
+          }}>
+            <p style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 600 }}>
+              Zeno Local Engine
+            </p>
+            <button
+              onClick={() => navigate('/dashboard')}
+              title="Vector DB Dashboard"
+              style={{
+                background: 'none', border: 'none', cursor: 'pointer',
+                color: 'var(--text-muted)', padding: 6, borderRadius: 6,
+                display: 'flex', alignItems: 'center', flexShrink: 0, transition: 'color 0.15s',
+              }}
+              onMouseEnter={e => e.currentTarget.style.color = 'var(--accent)'}
+              onMouseLeave={e => e.currentTarget.style.color = 'var(--text-muted)'}
+            >
+              <LayoutDashboardIcon size={15} />
+            </button>
+          </div>
 
         </div>
       </aside>

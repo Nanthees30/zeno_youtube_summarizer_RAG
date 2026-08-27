@@ -9,7 +9,6 @@ import { WelcomeScreen }  from '../components/WelcomeScreen'
 import { RAGPipeline3D }  from '../components/RAGPipeline3D'
 import { useChat }        from '../hooks/useChat'
 import { useChatHistory } from '../hooks/useChatHistory'
-import { useAuth }        from '../context/AuthContext'
 
 const INDEXING_PHASES = [
   { until: 5000, msg: 'Fetching transcript...' },
@@ -18,8 +17,6 @@ const INDEXING_PHASES = [
 ]
 
 export default function ChatPage() {
-  const { user } = useAuth()
-
   const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth > 768)
   const [mode, setMode]               = useState('agent')
   const [modeOpen, setModeOpen]       = useState(false)
@@ -28,6 +25,8 @@ export default function ChatPage() {
 
   const indexingStartRef = useRef(null)
   const statusTimerRef   = useRef(null)
+  const bottomRef       = useRef(null)
+  const pendingQueryRef = useRef(null)
 
   useEffect(() => {
     const handler = () => setIsMobile(window.innerWidth <= 768)
@@ -35,14 +34,12 @@ export default function ChatPage() {
     return () => window.removeEventListener('resize', handler)
   }, [])
 
-  const bottomRef       = useRef(null)
-  const pendingQueryRef = useRef(null)
-
+  // Removed user.id dependency - now uses a generic local storage key
   const {
     sessions, activeId, activeMessages,
     createSession, createSessionForVideo, selectSession, saveMessages, deleteSession,
     sessionVideoId, setSessionVideo,
-  } = useChatHistory(user?.id)
+  } = useChatHistory('public_user')
 
   const handleMessagesChange = useCallback((msgs) => {
     saveMessages(msgs)
@@ -88,7 +85,7 @@ export default function ChatPage() {
 
   useEffect(() => {
     if (!activeId) createSession()
-  }, [activeId])
+  }, [activeId, createSession])
 
   useEffect(() => {
     if (activeId && pendingQueryRef.current) {
@@ -126,6 +123,11 @@ export default function ChatPage() {
   return (
     <div style={{ display: 'flex', height: '100vh', overflow: 'hidden', background: 'var(--bg-base)' }}>
 
+      {/* 1. MAGIC FULLSCREEN 3D OVERLAY */}
+      {sessionVideoId && indexReady === null && (
+        <RAGPipeline3D stage={currentStage} indexingMsg={indexingMsg} />
+      )}
+
       {sidebarOpen && isMobile && (
         <div
           className="sidebar-backdrop"
@@ -134,7 +136,7 @@ export default function ChatPage() {
         />
       )}
 
-      {/* Sidebar (Old Clean Style) */}
+      {/* Sidebar */}
       <Sidebar
         sessions={sessions}
         activeId={activeId}
@@ -150,7 +152,7 @@ export default function ChatPage() {
 
       {/* Main Area */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden' }}>
-
+        
         {/* Header */}
         <header style={{
           height: 'var(--header-h)',
@@ -259,31 +261,15 @@ export default function ChatPage() {
 
         {/* Main Content Area */}
         <div style={{ flex: 1, overflowY: 'auto', position: 'relative' }}>
-          {/* 1. Show 3D RAG Pipeline Animation on Main Screen while Indexing */}
-          {sessionVideoId && indexReady === null ? (
-            <div style={{
-              display: 'flex', flexDirection: 'column', alignItems: 'center',
-              justify: 'center', height: '100%', padding: '32px 20px', maxWidth: 640, margin: '0 auto'
-            }}>
-              <h2 style={{ fontSize: 22, fontWeight: 800, color: 'var(--text-primary)', marginBottom: 6, fontFamily: 'var(--font-display)', textAlign: 'center' }}>
-                Preparing Video Context
-              </h2>
-              <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 20, textAlign: 'center', lineHeight: 1.6 }}>
-                Processing transcript, generating 3D vector embeddings, and indexing into Pinecone DB.
-              </p>
-
-              {/* 3D Visualizer Card */}
-              <RAGPipeline3D stage={currentStage} indexingMsg={indexingMsg} />
-            </div>
-          ) : messages.length === 0 ? (
-            /* 2. Show Welcome Screen after Indexing completes */
+          
+          {/* Show Welcome Screen OR Chat Messages */}
+          {messages.length === 0 ? (
             <WelcomeScreen
               onSuggestion={handleSend}
               indexReady={indexReady}
               sessionVideoId={sessionVideoId}
             />
           ) : (
-            /* 3. Show Chat Messages */
             <div className="messages-container" style={{
               maxWidth: 800, margin: '0 auto',
               padding: '20px 20px 8px',

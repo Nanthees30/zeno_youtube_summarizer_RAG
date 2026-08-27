@@ -4,7 +4,6 @@ import aiosqlite
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from app.core.database import get_db
-from app.api.deps import get_current_user
 from app.services.retrieval import retrieve_for_video
 from app.services.llm import get_llm
 from app.models.schemas import ChatRequest, ChatResponse, VideoSource
@@ -12,6 +11,7 @@ from app.core.config import settings
 from app.services.prompts import build_prompt
 
 router = APIRouter()
+PUBLIC_USER = "public_user"
 
 def _sse(payload: dict) -> str:
     return f"data: {json.dumps(payload)}\n\n"
@@ -19,12 +19,10 @@ def _sse(payload: dict) -> str:
 @router.post("/chat", response_model=ChatResponse)
 async def chat(
     req: ChatRequest,
-    current_user: dict = Depends(get_current_user),
     db: aiosqlite.Connection = Depends(get_db)
 ):
-    user_id = str(current_user["id"])
     context, sources = await asyncio.to_thread(
-        retrieve_for_video, user_id, req.video_id, req.query
+        retrieve_for_video, PUBLIC_USER, req.video_id, req.query
     )
     if not context:
         return ChatResponse(
@@ -43,11 +41,8 @@ async def chat(
 @router.post("/chat/stream")
 async def chat_stream(
     req: ChatRequest,
-    current_user: dict = Depends(get_current_user),
     db: aiosqlite.Connection = Depends(get_db)
 ):
-    user_id = str(current_user["id"])
-
     async def generate():
         if not req.video_id:
             yield _sse({'type': 'token', 'content': 'No video selected.'})
@@ -55,7 +50,7 @@ async def chat_stream(
             return
 
         context, sources = await asyncio.to_thread(
-            retrieve_for_video, user_id, req.video_id, req.query
+            retrieve_for_video, PUBLIC_USER, req.video_id, req.query
         )
 
         yield _sse({'type': 'sources', 'sources': sources})
@@ -81,7 +76,7 @@ async def chat_stream(
                 INSERT INTO query_history (user_id, video_id, query, answer, sources_count, mode)
                 VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (user_id, req.video_id, req.query, "".join(full), len(sources), req.mode)
+                (PUBLIC_USER, req.video_id, req.query, "".join(full), len(sources), req.mode)
             )
             await db.commit()
         except Exception as e:

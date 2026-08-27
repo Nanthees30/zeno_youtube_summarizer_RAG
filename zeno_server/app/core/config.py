@@ -19,7 +19,8 @@ class Settings(BaseSettings):
     pinecone_cloud: str = "aws"
     pinecone_region: str = "us-east-1"
     embedding_dimension: int = 384
-    # Updated to active Groq model
+    embedding_model: str = "BAAI/bge-small-en-v1.5"
+
     model_name: str = "llama-3.3-70b-versatile"
     allowed_origins: str = "http://localhost:5173"
     supadata_api_key: str = "sd_03ac033a66e89560755c7ee5de34190c"

@@ -176,11 +176,7 @@ export function useChat({ initialMessages = [], onMessagesChange, sessionId, ses
     setError(null)
   }, [update])
 
-  // C-3: accept the video ID as an explicit parameter so the polling interval
-  // never relies on a stale closure value — Sidebar calls onVideoIndexed(video_id)
-  // immediately after onVideoLinked(video_id), before React re-renders.
   const onVideoIndexed = useCallback((videoId) => {
-    // videoId passed from Sidebar; fall back to hook's own sessionVideoId
     const vidId = videoId ?? sessionVideoId
 
     if (pollRef.current) {
@@ -193,7 +189,7 @@ export function useChat({ initialMessages = [], onMessagesChange, sessionId, ses
 
     const interval = setInterval(async () => {
       try {
-        const d = await api.videoStatus(vidId)   // C-3: uses stable local var
+        const d = await api.videoStatus(vidId)
         if (d.ready && !d.indexing) {
           setIndexReady(true)
           clearInterval(interval)
@@ -216,7 +212,7 @@ export function useChat({ initialMessages = [], onMessagesChange, sessionId, ses
       pollRef.current = null
       setIndexReady(false)
       setError('Indexing timed out — please remove the video and try again.')
-    }, 120_000)
+    }, 300_000)
 
     pollRef.current = { interval, timeout }
   }, [sessionVideoId])  
