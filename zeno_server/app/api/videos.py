@@ -62,25 +62,36 @@ async def list_videos(
         for r in rows
     ]
 
+# --- LONG POLLING FIX IMPLEMENTED HERE ---
 @router.get("/video-status")
 async def video_status(
     video_id: str = None,
     db: aiosqlite.Connection = Depends(get_db)
 ):
-    async with db.execute(
-        "SELECT status, error_msg FROM videos WHERE user_id = ? AND video_id = ?",
-        (PUBLIC_USER, video_id)
-    ) as cursor:
-        row = await cursor.fetchone()
+    max_polls = 10  # Wait up to 15 seconds (10 loops * 1.5s sleep) per HTTP request
+    
+    for _ in range(max_polls):
+        async with db.execute(
+            "SELECT status, error_msg FROM videos WHERE user_id = ? AND video_id = ?",
+            (PUBLIC_USER, video_id)
+        ) as cursor:
+            row = await cursor.fetchone()
 
-    if not row:
-        return {"ready": False, "indexing": False, "failed": False}
-    return {
-        "ready": row["status"] == "ready",
-        "indexing": row["status"] == "processing",
-        "failed": row["status"] == "failed",
-        "error_msg": row["error_msg"],
-    }
+        if not row:
+            return {"ready": False, "indexing": False, "failed": False}
+            
+        status = row["status"]
+        if status == "ready":
+            return {"ready": True, "indexing": False, "failed": False, "error_msg": row["error_msg"]}
+        elif status == "failed":
+            return {"ready": False, "indexing": False, "failed": True, "error_msg": row["error_msg"]}
+            
+        # Hold the connection open and wait 1.5 seconds before checking the database again
+        await asyncio.sleep(1.5)
+        
+    # If it's still processing after holding the connection, return safely
+    # The frontend will receive this and can make ONE new request instead of 100 requests.
+    return {"ready": False, "indexing": True, "failed": False, "error_msg": None}
 
 @router.post("/index-video")
 async def index_video(

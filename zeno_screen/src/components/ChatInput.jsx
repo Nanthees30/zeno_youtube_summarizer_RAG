@@ -123,7 +123,7 @@ export function ChatInput({ onSend, isLoading, disabled = false, statusMsg = nul
           </button>
         </div>
 
-        <p style={{
+        {/* <p style={{
           fontSize: 11, color: 'var(--text-muted)',
           textAlign: 'center', marginTop: 8,
         }}>
@@ -136,7 +136,7 @@ export function ChatInput({ onSend, isLoading, disabled = false, statusMsg = nul
             background: 'var(--bg-elevated)', border: '1px solid var(--border-strong)',
             borderRadius: 4, padding: '1px 5px', color: 'var(--text-secondary)',
           }}>Shift+Enter</kbd> for newline
-        </p>
+        </p> */}
       </div>
     </div>
   )
