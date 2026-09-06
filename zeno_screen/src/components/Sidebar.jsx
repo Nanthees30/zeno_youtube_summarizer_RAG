@@ -65,23 +65,18 @@ export function Sidebar({
   const groups = groupSessions(sessions)
   const pollTimerRef = useRef(null)
 
-  const fetchVideos = useCallback(async () => {
+  const fetchVideos = async () => {
     try {
       const data = await api.listVideos()
       setVideos(data)
-      const stillProcessing = data.some(v => v.status === 'processing')
-      if (!stillProcessing && pollTimerRef.current) {
-        clearInterval(pollTimerRef.current)
-        pollTimerRef.current = null
-      }
     } catch {
-      // ignore
+
     } finally {
       setLoadingVideos(false)
     }
-  }, [])
+  }
 
-  useEffect(() => { fetchVideos() }, [fetchVideos])
+  useEffect(() => { fetchVideos() }, [])
 
   useEffect(() => {
     if (indexReady === null && sessionVideoId) {
@@ -117,7 +112,7 @@ export function Sidebar({
         pollTimerRef.current = null
       }
     }
-  }, [videos, fetchVideos])
+  }, [])
 
   useEffect(() => () => { if (pollTimerRef.current) clearInterval(pollTimerRef.current) }, [])
 
