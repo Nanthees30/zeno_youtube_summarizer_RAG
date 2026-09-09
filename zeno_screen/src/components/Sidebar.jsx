@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   TrashIcon, MessageSquareIcon,
@@ -30,8 +30,9 @@ function timeLabel(iso) {
 function groupSessions(sessions) {
   const today = [], week = [], older = []
   const now = Date.now()
+  const safeSessions = Array.isArray(sessions) ? sessions : []
 
-  for (const s of sessions) {
+  for (const s of safeSessions) {
     const age = (now - new Date(s.updatedAt)) / 1000
     if (age < 86400) today.push(s)
     else if (age < 604800) week.push(s)
@@ -59,25 +60,62 @@ export function Sidebar({
   const [loadingVideos, setLoadingVideos] = useState(true)
   const [deleteError, setDeleteError] = useState(null)
   const [indexingMsg, setIndexingMsg] = useState('Fetching transcript...')
+  
   const indexingStartRef = useRef(null)
   const statusTimerRef = useRef(null)
-
-  const groups = groupSessions(sessions)
   const pollTimerRef = useRef(null)
 
+  const groups = groupSessions(sessions)
+
+  // 1. BULLETPROOF FETCH FUNCTION
   const fetchVideos = async () => {
     try {
       const data = await api.listVideos()
-      setVideos(data)
+      // Strict Array check to prevent .find() crashes from HTML/500 errors
+      if (Array.isArray(data)) {
+        setVideos(data)
+      } else {
+        setVideos([])
+      }
     } catch {
-
+      setVideos([])
     } finally {
       setLoadingVideos(false)
     }
   }
 
-  useEffect(() => { fetchVideos() }, [])
+  // Initial Fetch
+  useEffect(() => { 
+    fetchVideos() 
+  }, [])
 
+  // 2. SAFE BACKGROUND POLLING FOR PROCESSING VIDEOS
+  useEffect(() => {
+    const safeVideos = Array.isArray(videos) ? videos : []
+    const hasProcessing = safeVideos.some(v => v.status === 'processing')
+    
+    if (hasProcessing && !pollTimerRef.current) {
+      pollTimerRef.current = setInterval(fetchVideos, 8000)
+    }
+    
+    return () => {
+      const currentVideos = Array.isArray(videos) ? videos : []
+      if (!currentVideos.some(v => v.status === 'processing') && pollTimerRef.current) {
+        clearInterval(pollTimerRef.current)
+        pollTimerRef.current = null
+      }
+    }
+  }, [videos])
+
+  // Cleanup timers on unmount
+  useEffect(() => {
+    return () => {
+      if (pollTimerRef.current) clearInterval(pollTimerRef.current)
+      if (statusTimerRef.current) clearInterval(statusTimerRef.current)
+    }
+  }, [])
+
+  // 3. UI PROGRESS ANIMATION
   useEffect(() => {
     if (indexReady === null && sessionVideoId) {
       indexingStartRef.current = Date.now()
@@ -100,21 +138,6 @@ export function Sidebar({
       }
     }
   }, [indexReady, sessionVideoId])
-
-  useEffect(() => {
-    const hasProcessing = videos.some(v => v.status === 'processing')
-    if (hasProcessing && !pollTimerRef.current) {
-      pollTimerRef.current = setInterval(fetchVideos, 8000)
-    }
-    return () => {
-      if (!videos.some(v => v.status === 'processing') && pollTimerRef.current) {
-        clearInterval(pollTimerRef.current)
-        pollTimerRef.current = null
-      }
-    }
-  }, [])
-
-  useEffect(() => () => { if (pollTimerRef.current) clearInterval(pollTimerRef.current) }, [])
 
   const handleVideoSuccess = (video_id, title) => {
     onVideoAdded?.(video_id, title)
@@ -145,7 +168,9 @@ export function Sidebar({
     setConfirmDelete(null)
   }
 
-  const activeVideo = videos.find(v => v.video_id === sessionVideoId)
+  // 4. SAFE ACTIVE VIDEO FINDER
+  const safeVideosList = Array.isArray(videos) ? videos : []
+  const activeVideo = safeVideosList.find(v => v.video_id === sessionVideoId)
 
   return (
     <>
@@ -287,7 +312,7 @@ export function Sidebar({
 
           {/* Scrollable Chat History */}
           <div style={{ flex: 1, overflowY: 'auto', padding: '4px 8px' }}>
-            {sessions.length === 0 ? (
+            {groups.length === 0 ? (
               <div style={{ padding: '20px 12px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 12 }}>
                 <MessageSquareIcon size={22} style={{ margin: '0 auto 8px', opacity: 0.4 }} />
                 <p>No video chats yet</p>
@@ -393,17 +418,17 @@ export function Sidebar({
 
             <div style={{ marginTop: 14, paddingTop: 10, borderTop: '1px solid var(--border)' }}>
               <p style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.08em', color: 'var(--text-muted)', padding: '0 8px 6px', textTransform: 'uppercase' }}>
-                All Indexed Videos ({videos.length})
+                All Indexed Videos ({safeVideosList.length})
               </p>
               <VideoList
-                videos={videos}
+                videos={safeVideosList}
                 onDelete={handleDeleteVideo}
                 loading={loadingVideos}
               />
             </div>
           </div>
 
-          {/* Simple Open-Source Footer (Replaced User Profile) */}
+          {/* Simple Open-Source Footer */}
           <div style={{
             borderTop: '1px solid var(--border)',
             padding: '12px 14px', flexShrink: 0,

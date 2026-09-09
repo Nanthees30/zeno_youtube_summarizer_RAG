@@ -18,7 +18,7 @@ app = FastAPI(
 )
 
 origins = [
-    "http://13.233.163.88/",
+    "http://13.233.163.88",
     "https://zeno-youtube-summarizer-rag.vercel.app",
     "http://localhost:5173",
     "http://localhost:3000",

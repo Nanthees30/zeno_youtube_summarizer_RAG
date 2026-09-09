@@ -1,11 +1,17 @@
+import os
 import aiosqlite
 from typing import Optional
 
 _db_conn: Optional[aiosqlite.Connection] = None
 
-async def init_db(database_url: str = "zeno.db") -> None:
+# Create absolute path so SQLite knows exactly where to save the file
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DB_PATH = os.path.join(BASE_DIR, "zeno.db")
+
+async def init_db(database_url: str = None) -> None:
     global _db_conn
-    _db_conn = await aiosqlite.connect("zeno.db")
+    # Use the absolute path here
+    _db_conn = await aiosqlite.connect(DB_PATH)
     _db_conn.row_factory = aiosqlite.Row
 
     # Create all required SQLite tables on startup
